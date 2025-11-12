@@ -80,8 +80,8 @@ def main():
                        help='Angle tolerance for arc detection (degrees, default: 8.0)')
     parser.add_argument('--radius-tolerance', type=float, default=0.03,
                        help='Radius tolerance for arc detection (fraction, default: 0.03)')
-    parser.add_argument('--min-arc-points', type=int, default=4,
-                       help='Minimum points to consider as arc (default: 4)')
+    parser.add_argument('--min-arc-points', type=int, default=8,
+                       help='Minimum points to consider as arc (default: 8)')
 
     args = parser.parse_args()
 

@@ -17,7 +17,7 @@ class PDFtoSVGConverter:
     def __init__(self, arc_detection: bool = True,
                  angle_tolerance: float = 8.0,
                  radius_tolerance: float = 0.03,
-                 min_arc_points: int = 4):
+                 min_arc_points: int = 8):
         """
         Args:
             arc_detection: Enable arc detection from polylines
@@ -107,18 +107,60 @@ class PDFtoSVGConverter:
             'arcs': 0,
             'circles': 0,
             'polylines': 0,
-            'line_segments_saved': 0
+            'line_segments_saved': 0,
+            'merged_circles': 0
         }
 
-        # Process each path
+        # First pass: collect all detected arcs
+        all_detected_arcs = []
+        unprocessed_elements = []  # Store elements that aren't arcs
+
         for path_idx, path in enumerate(paths):
-            layer_name = f"path_{path_idx}"
-            self._process_path(svg, path, page_height, layer_name, stats)
+            detected_arcs, other_elements = self._collect_arcs_from_path(path, page_height)
+            all_detected_arcs.extend(detected_arcs)
+            unprocessed_elements.extend(other_elements)
+
+        # Merge arcs that form complete circles
+        merged_circles, remaining_arcs = self._merge_arcs_into_circles(all_detected_arcs)
+
+        # Add merged circles to SVG
+        for circle_info in merged_circles:
+            self._add_circle(svg, circle_info['center'], circle_info['radius'],
+                           page_height, circle_info['stroke'], circle_info['fill'],
+                           circle_info['stroke_width'])
+            stats['circles'] += 1
+            stats['merged_circles'] += 1
+            stats['line_segments_saved'] += circle_info['segments_saved']
+
+        # Add remaining arcs to SVG
+        for arc_info in remaining_arcs:
+            if arc_info['is_circle']:
+                self._add_circle(svg, arc_info['center'], arc_info['radius'],
+                               page_height, arc_info['stroke'], arc_info['fill'],
+                               arc_info['stroke_width'])
+                stats['circles'] += 1
+            else:
+                self._add_arc(svg, arc_info['arc'], page_height,
+                            arc_info['stroke'], arc_info['fill'],
+                            arc_info['stroke_width'])
+                stats['arcs'] += 1
+            stats['line_segments_saved'] += arc_info['segments_saved']
+
+        # Add other elements (lines, polylines) to SVG
+        for elem in unprocessed_elements:
+            if elem['type'] == 'line':
+                self._add_line(svg, elem['p1'], elem['p2'], page_height,
+                             elem['stroke'], elem['fill'], elem['stroke_width'])
+                stats['lines'] += 1
+            elif elem['type'] == 'polyline':
+                self._add_polyline(svg, elem['points'], page_height,
+                                  elem['stroke'], elem['fill'], elem['stroke_width'])
+                stats['polylines'] += 1
 
         # Add statistics as comment
         stats_comment = ET.Comment(
             f" Conversion Statistics: "
-            f"{stats['circles']} circles, "
+            f"{stats['circles']} circles ({stats['merged_circles']} merged), "
             f"{stats['arcs']} arcs, "
             f"{stats['lines']} lines, "
             f"{stats['polylines']} polylines, "
@@ -127,6 +169,142 @@ class PDFtoSVGConverter:
         svg.insert(0, stats_comment)
 
         return svg
+
+    def _collect_arcs_from_path(self, path: Dict[str, Any], page_height: float):
+        """
+        Collect detected arcs and other elements from a path
+        Returns: (detected_arcs, other_elements)
+        """
+        detected_arcs = []
+        other_elements = []
+
+        items = path.get('items', [])
+        if not items:
+            return detected_arcs, other_elements
+
+        # Extract stroke properties
+        stroke_color = path.get('color')
+        fill_color = path.get('fill')
+        stroke_width = path.get('width', 1.0)
+
+        stroke = self._rgb_to_hex(stroke_color) if stroke_color else 'none'
+        fill = self._rgb_to_hex(fill_color) if fill_color else 'none'
+
+        # Group consecutive line segments into polylines
+        polylines = self._extract_polylines(items)
+
+        # Process each polyline
+        for polyline in polylines:
+            if len(polyline) < 2:
+                continue
+
+            # Try arc detection if enabled
+            if self.arc_detection and len(polyline) >= self.detector.min_arc_points:
+                arcs = self.detector.detect_arcs(polyline)
+
+                if arcs:
+                    points_covered = 0
+                    for arc in arcs:
+                        arc_type = self.detector.classify_arc(arc)
+                        detected_arcs.append({
+                            'arc': arc,
+                            'is_circle': arc_type == 'full_circle',
+                            'center': arc.center.to_tuple(),
+                            'radius': arc.radius,
+                            'stroke': stroke,
+                            'fill': fill,
+                            'stroke_width': stroke_width,
+                            'segments_saved': len(arc.points) - 1
+                        })
+                        points_covered += len(arc.points)
+
+                    # If we covered most of the polyline, don't add as polyline
+                    coverage = points_covered / len(polyline)
+                    if coverage > 0.5:
+                        continue
+
+            # Fallback: add as polyline or lines
+            if len(polyline) == 2:
+                other_elements.append({
+                    'type': 'line',
+                    'p1': polyline[0],
+                    'p2': polyline[1],
+                    'stroke': stroke,
+                    'fill': fill,
+                    'stroke_width': stroke_width
+                })
+            else:
+                other_elements.append({
+                    'type': 'polyline',
+                    'points': polyline,
+                    'stroke': stroke,
+                    'fill': fill,
+                    'stroke_width': stroke_width
+                })
+
+        return detected_arcs, other_elements
+
+    def _merge_arcs_into_circles(self, arcs: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Merge multiple arcs with same center and radius into complete circles
+        Returns: (merged_circles, remaining_arcs)
+        """
+        if not arcs:
+            return [], []
+
+        # Group arcs by center and radius
+        arc_groups = {}
+        for arc_info in arcs:
+            cx, cy = arc_info['center']
+            r = arc_info['radius']
+
+            # Find matching group (within tolerance)
+            found_group = False
+            for key in list(arc_groups.keys()):
+                key_cx, key_cy, key_r = key
+                # Check if center and radius are similar (within 3% tolerance)
+                if (abs(cx - key_cx) < r * 0.03 and
+                    abs(cy - key_cy) < r * 0.03 and
+                    abs(r - key_r) < r * 0.03):
+                    arc_groups[key].append(arc_info)
+                    found_group = True
+                    break
+
+            if not found_group:
+                arc_groups[(cx, cy, r)] = [arc_info]
+
+        merged_circles = []
+        remaining_arcs = []
+
+        # Check each group to see if arcs combine into a circle
+        for (cx, cy, r), group_arcs in arc_groups.items():
+            # Calculate total angle coverage
+            total_angle_coverage = 0
+            total_segments_saved = 0
+
+            for arc_info in group_arcs:
+                arc = arc_info['arc']
+                angle_span = (arc.end_angle - arc.start_angle) % 360
+                total_angle_coverage += angle_span
+                total_segments_saved += arc_info['segments_saved']
+
+            # If multiple arcs cover close to 360 degrees, merge into circle
+            if len(group_arcs) >= 2 and total_angle_coverage >= 340:
+                # Take stroke properties from first arc
+                first_arc = group_arcs[0]
+                merged_circles.append({
+                    'center': (cx, cy),
+                    'radius': r,
+                    'stroke': first_arc['stroke'],
+                    'fill': first_arc['fill'],
+                    'stroke_width': first_arc['stroke_width'],
+                    'segments_saved': total_segments_saved
+                })
+            else:
+                # Keep as individual arcs
+                remaining_arcs.extend(group_arcs)
+
+        return merged_circles, remaining_arcs
 
     def _process_path(self, svg: ET.Element, path: Dict[str, Any],
                      page_height: float, layer: str, stats: Dict[str, int]):
@@ -401,8 +579,8 @@ def main():
                        help='Angle tolerance for arc detection (degrees, default: 8.0)')
     parser.add_argument('--radius-tolerance', type=float, default=0.03,
                        help='Radius tolerance for arc detection (fraction, default: 0.03)')
-    parser.add_argument('--min-arc-points', type=int, default=4,
-                       help='Minimum points to consider as arc (default: 4)')
+    parser.add_argument('--min-arc-points', type=int, default=8,
+                       help='Minimum points to consider as arc (default: 8)')
 
     args = parser.parse_args()
 

@@ -44,7 +44,7 @@ class Arc:
 
 class ArcDetector:
     def __init__(self, angle_tolerance: float = 5.0, radius_tolerance: float = 0.02,
-                 min_arc_points: int = 3, collinearity_threshold: float = 0.001):
+                 min_arc_points: int = 8, collinearity_threshold: float = 0.001):
         """
         Args:
             angle_tolerance: Max deviation in degrees from expected arc angles
@@ -59,8 +59,172 @@ class ArcDetector:
 
     def detect_arcs(self, points: List[Tuple[float, float]]) -> List[Arc]:
         """
-        Detect arcs from a sequence of connected points
+        Detect arcs from a sequence of connected points using
+        Angle-Based Curvature Segmentation and Reconstruction (AASR)
+
         Returns list of Arc objects
+        """
+        if len(points) < self.min_arc_points:
+            return []
+
+        points = [Point(p[0], p[1]) for p in points]
+
+        # Step 1: Segment polyline by curvature regions
+        curved_segments = self._segment_by_curvature(points)
+
+        # Step 2: Fit circles/arcs to curved segments
+        arcs = []
+        for segment in curved_segments:
+            if len(segment) >= self.min_arc_points:
+                arc = self._fit_arc_to_segment(segment)
+                if arc:
+                    arcs.append(arc)
+
+        return arcs
+
+    def _segment_by_curvature(self, points: List[Point],
+                              angle_tolerance_rad: float = None) -> List[List[Point]]:
+        """
+        Segment polyline into regions of consistent curvature using AASR algorithm
+
+        Returns list of curved segments (filters out straight sections)
+        """
+        if angle_tolerance_rad is None:
+            # Convert angle tolerance from degrees to radians
+            angle_tolerance_rad = math.radians(self.angle_tolerance)
+
+        if len(points) < 3:
+            return []
+
+        segments = []
+        current_segment = [points[0]]
+        current_curvature_sign = None
+
+        for i in range(1, len(points) - 1):
+            # Calculate vectors for consecutive segments
+            v1 = Point(points[i].x - points[i-1].x, points[i].y - points[i-1].y)
+            v2 = Point(points[i+1].x - points[i].x, points[i+1].y - points[i].y)
+
+            # Normalize vectors
+            len_v1 = math.sqrt(v1.x**2 + v1.y**2)
+            len_v2 = math.sqrt(v2.x**2 + v2.y**2)
+
+            if len_v1 < 1e-6 or len_v2 < 1e-6:
+                # Skip degenerate segments
+                continue
+
+            v1_norm = Point(v1.x / len_v1, v1.y / len_v1)
+            v2_norm = Point(v2.x / len_v2, v2.y / len_v2)
+
+            # Calculate angle between vectors
+            dot = v1_norm.x * v2_norm.x + v1_norm.y * v2_norm.y
+            dot = max(-1.0, min(1.0, dot))  # Clamp to [-1, 1]
+            theta = math.acos(dot)
+
+            # Calculate curvature direction using cross product (2D)
+            cross = v1_norm.x * v2_norm.y - v1_norm.y * v2_norm.x
+            curvature_sign = 1 if cross > 0 else -1 if cross < 0 else 0
+
+            # Check if this is a straight section
+            deviation_from_straight = abs(math.pi - theta)
+
+            if deviation_from_straight < angle_tolerance_rad:
+                # Straight section - end current curved segment
+                if len(current_segment) >= self.min_arc_points:
+                    segments.append(current_segment)
+                current_segment = [points[i]]
+                current_curvature_sign = None
+            else:
+                # Curved section
+                if current_curvature_sign is None:
+                    # Start new curved segment
+                    current_curvature_sign = curvature_sign
+                    current_segment.append(points[i])
+                elif current_curvature_sign == curvature_sign:
+                    # Continue current curved segment (same direction)
+                    current_segment.append(points[i])
+                else:
+                    # Curvature direction changed - end current segment
+                    if len(current_segment) >= self.min_arc_points:
+                        segments.append(current_segment)
+                    current_segment = [points[i]]
+                    current_curvature_sign = curvature_sign
+
+        # Add last point to current segment
+        if len(points) > 0:
+            current_segment.append(points[-1])
+
+        # Add final segment if it's long enough
+        if len(current_segment) >= self.min_arc_points:
+            segments.append(current_segment)
+
+        return segments
+
+    def _fit_arc_to_segment(self, segment: List[Point]) -> Optional[Arc]:
+        """
+        Fit a circle/arc to an entire curved segment using global least-squares
+
+        This is the core AASR reconstruction step
+        """
+        if len(segment) < 3:
+            return None
+
+        # Check if segment is collinear (straight line, not a curve)
+        if len(segment) >= 3 and self._are_collinear(segment[0], segment[1], segment[2]):
+            return None
+
+        # Try to fit circle to entire segment
+        # Use first, middle, and last points for initial circle estimation
+        mid_idx = len(segment) // 2
+        center = self._find_circle_center(segment[0], segment[mid_idx], segment[-1])
+
+        if center is None:
+            return None
+
+        # Calculate radius from center to all points
+        radii = [center.distance_to(p) for p in segment]
+        avg_radius = sum(radii) / len(radii)
+
+        if avg_radius < 2.0:  # Filter out tiny arcs
+            return None
+
+        # Check radius consistency across all points (global fit quality)
+        max_deviation = max(abs(r - avg_radius) for r in radii)
+        relative_deviation = max_deviation / avg_radius
+
+        if relative_deviation > self.radius_tolerance:
+            # Poor fit - try to find best contiguous sub-segment
+            return self._try_fit_arc(segment)
+
+        # Good fit! Calculate arc parameters
+        start_angle = self._calculate_angle(center, segment[0])
+        end_angle = self._calculate_angle(center, segment[-1])
+
+        # Check if it's a full circle
+        is_full_circle = False
+        if len(segment) >= 8:
+            first_to_last_dist = segment[0].distance_to(segment[-1])
+            avg_segment_length = sum(segment[i].distance_to(segment[i+1])
+                                    for i in range(len(segment)-1)) / (len(segment)-1)
+
+            if first_to_last_dist < 1.2 * avg_segment_length:
+                angle_span = self._calculate_angle_span(start_angle, end_angle)
+                if angle_span >= 358:
+                    is_full_circle = True
+
+        return Arc(
+            center=center,
+            radius=avg_radius,
+            start_angle=start_angle,
+            end_angle=end_angle,
+            points=segment,
+            is_full_circle=is_full_circle
+        )
+
+    def detect_arcs_legacy(self, points: List[Tuple[float, float]]) -> List[Arc]:
+        """
+        Legacy arc detection method (sliding window approach)
+        Kept for compatibility/fallback
         """
         if len(points) < self.min_arc_points:
             return []
@@ -72,8 +236,14 @@ class ArcDetector:
         while i < len(points) - self.min_arc_points + 1:
             arc = self._try_fit_arc(points[i:])
             if arc and len(arc.points) >= self.min_arc_points:
-                arcs.append(arc)
-                i += len(arc.points) - 1  # -1 to include shared endpoint
+                # Filter out tiny arcs (likely noise or very small features)
+                # Minimum radius of 2.0 units to avoid detecting micro-circles
+                if arc.radius >= 2.0:
+                    arcs.append(arc)
+                    # Advance by the full arc length to prevent overlapping detections
+                    i += len(arc.points)
+                else:
+                    i += 1
             else:
                 i += 1
 
@@ -137,11 +307,13 @@ class ArcDetector:
             avg_segment_length = sum(arc_points[i].distance_to(arc_points[i+1])
                                     for i in range(len(arc_points)-1)) / (len(arc_points)-1)
 
-            # If first and last points are close (within 2 segment lengths)
-            if first_to_last_dist < 2 * avg_segment_length:
-                # Check if arc spans close to 360 degrees
+            # If first and last points are very close (within 1.2 segment lengths)
+            # Use stricter threshold to avoid misclassifying partial arcs
+            if first_to_last_dist < 1.2 * avg_segment_length:
+                # Check if arc spans very close to 360 degrees
+                # Must be at least 358 degrees to be considered a full circle
                 angle_span = self._calculate_angle_span(start_angle, end_angle)
-                if angle_span > 320:  # Allow some tolerance
+                if angle_span >= 358:  # Very strict: must cover almost full circle
                     is_full_circle = True
 
         return Arc(
