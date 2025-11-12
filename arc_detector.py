@@ -469,6 +469,112 @@ class ArcDetector:
 
         return True
 
+    def is_closed_loop(self, points: List[Tuple[float, float]],
+                       tolerance_factor: float = 1.5) -> bool:
+        """
+        Check if polyline forms a closed loop (first point ≈ last point)
+
+        Args:
+            points: List of (x, y) points
+            tolerance_factor: Multiplier for average segment length to determine closure
+
+        Returns:
+            True if first and last points are close enough
+        """
+        if len(points) < self.min_arc_points:
+            return False
+
+        # Calculate average segment length
+        total_length = 0
+        for i in range(len(points) - 1):
+            dx = points[i+1][0] - points[i][0]
+            dy = points[i+1][1] - points[i][1]
+            total_length += math.sqrt(dx**2 + dy**2)
+
+        avg_segment_length = total_length / (len(points) - 1)
+
+        # Check distance between first and last point
+        dx = points[-1][0] - points[0][0]
+        dy = points[-1][1] - points[0][1]
+        closure_dist = math.sqrt(dx**2 + dy**2)
+
+        return closure_dist < tolerance_factor * avg_segment_length
+
+    def check_radius_consistency(self, points: List[Tuple[float, float]]) -> Optional[Tuple[Point, float, float]]:
+        """
+        Check if points lie on a circle with consistent radius
+
+        Args:
+            points: List of (x, y) points
+
+        Returns:
+            (center, radius, relative_deviation) if consistent, None otherwise
+        """
+        if len(points) < 3:
+            return None
+
+        points_obj = [Point(p[0], p[1]) for p in points]
+
+        # Calculate approximate center (centroid)
+        cx = sum(p.x for p in points_obj) / len(points_obj)
+        cy = sum(p.y for p in points_obj) / len(points_obj)
+        center = Point(cx, cy)
+
+        # Calculate distances from center
+        radii = [center.distance_to(p) for p in points_obj]
+        avg_radius = sum(radii) / len(radii)
+
+        # Check consistency
+        max_deviation = max(abs(r - avg_radius) for r in radii)
+        relative_deviation = max_deviation / avg_radius if avg_radius > 0 else float('inf')
+
+        return center, avg_radius, relative_deviation
+
+    def detect_circle_global(self, points: List[Tuple[float, float]]) -> Optional[Arc]:
+        """
+        Detect if polyline is a complete circle using global analysis
+
+        This is a fast preprocessing step for obvious circles before AASR.
+
+        Args:
+            points: List of (x, y) points
+
+        Returns:
+            Arc object if circle detected, None otherwise
+        """
+        if len(points) < self.min_arc_points:
+            return None
+
+        # Check if it's a closed loop
+        if not self.is_closed_loop(points):
+            return None
+
+        # Check radius consistency
+        result = self.check_radius_consistency(points)
+        if result is None:
+            return None
+
+        center, radius, rel_deviation = result
+
+        # Must have consistent radius
+        if rel_deviation > self.radius_tolerance:
+            return None
+
+        # Filter out tiny circles (likely noise)
+        if radius < 2.0:
+            return None
+
+        # Create full circle arc
+        points_obj = [Point(p[0], p[1]) for p in points]
+        return Arc(
+            center=center,
+            radius=radius,
+            start_angle=0,
+            end_angle=360,
+            points=points_obj,
+            is_full_circle=True
+        )
+
     def classify_arc(self, arc: Arc) -> str:
         """Classify arc type: full_circle, major_arc, minor_arc, semicircle"""
         if arc.is_full_circle:

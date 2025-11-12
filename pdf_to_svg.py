@@ -15,14 +15,14 @@ from arc_detector import ArcDetector, parse_point_string
 
 class PDFtoSVGConverter:
     def __init__(self, arc_detection: bool = True,
-                 angle_tolerance: float = 8.0,
-                 radius_tolerance: float = 0.03,
+                 angle_tolerance: float = 5.0,
+                 radius_tolerance: float = 0.02,
                  min_arc_points: int = 8):
         """
         Args:
             arc_detection: Enable arc detection from polylines
             angle_tolerance: Max angle deviation for arc detection (degrees)
-            radius_tolerance: Max relative radius deviation (0.03 = 3%)
+            radius_tolerance: Max relative radius deviation (0.02 = 2%)
             min_arc_points: Minimum points to consider as arc
         """
         self.arc_detection = arc_detection
@@ -200,7 +200,16 @@ class PDFtoSVGConverter:
 
             # Try arc detection if enabled
             if self.arc_detection and len(polyline) >= self.detector.min_arc_points:
-                arcs = self.detector.detect_arcs(polyline)
+                arcs = []
+
+                # HYBRID APPROACH: Try global circle detection first (fast preprocessing)
+                # This catches high-resolution circles that AASR might miss
+                circle = self.detector.detect_circle_global(polyline)
+                if circle:
+                    arcs = [circle]
+                else:
+                    # Fall back to AASR for complex/partial arcs
+                    arcs = self.detector.detect_arcs(polyline)
 
                 if arcs:
                     points_covered = 0
