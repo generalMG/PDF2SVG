@@ -15,9 +15,9 @@ from arc_detector import ArcDetector, parse_point_string
 
 class PDFtoSVGConverter:
     def __init__(self, arc_detection: bool = True,
-                 angle_tolerance: float = 5.0,
+                 angle_tolerance: float = 2.0,
                  radius_tolerance: float = 0.02,
-                 min_arc_points: int = 8):
+                 min_arc_points: int = 5):
         """
         Args:
             arc_detection: Enable arc detection from polylines
@@ -584,12 +584,12 @@ def main():
     parser.add_argument('-p', '--page', type=int, default=0, help='Page number (0-indexed, default: 0)')
     parser.add_argument('--no-arc-detection', action='store_true',
                        help='Disable arc detection (output polylines only)')
-    parser.add_argument('--angle-tolerance', type=float, default=8.0,
-                       help='Angle tolerance for arc detection (degrees, default: 8.0)')
-    parser.add_argument('--radius-tolerance', type=float, default=0.03,
-                       help='Radius tolerance for arc detection (fraction, default: 0.03)')
-    parser.add_argument('--min-arc-points', type=int, default=8,
-                       help='Minimum points to consider as arc (default: 8)')
+    parser.add_argument('--angle_tolerance', type=float, default=2.0,
+                       help='Angle tolerance for arc detection (degrees, default: 2.0)')
+    parser.add_argument('--radius_tolerance', type=float, default=0.02,
+                       help='Radius tolerance for arc detection (fraction, default: 0.02)')
+    parser.add_argument('--min_arc_points', type=int, default=5,
+                       help='Minimum points to consider as arc (default: 5)')
 
     args = parser.parse_args()
 
