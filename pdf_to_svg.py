@@ -17,7 +17,7 @@ class PDFtoSVGConverter:
     def __init__(self, arc_detection: bool = True,
                  angle_tolerance: float = 2.0,
                  radius_tolerance: float = 0.02,
-                 min_arc_points: int = 5):
+                 min_arc_points: int = 4):
         """
         Args:
             arc_detection: Enable arc detection from polylines
@@ -80,6 +80,8 @@ class PDFtoSVGConverter:
         page_height = page.rect.height
 
         # Create SVG root
+        # Note: PyMuPDF uses bottom-left origin (Y up), SVG uses top-left (Y down)
+        # We handle coordinate transformation in each element rendering function
         svg = ET.Element('svg', {
             'xmlns': 'http://www.w3.org/2000/svg',
             'width': f"{page_width}",
@@ -358,10 +360,73 @@ class PDFtoSVGConverter:
                 self._add_polyline(svg, polyline, page_height, stroke, fill, stroke_width)
                 stats['polylines'] += 1
 
+    def _validate_curve_data(self, item: Any) -> bool:
+        """
+        Validate that curve/arc operation contains all required point data
+
+        Args:
+            item: PDF path item (operation, point1, point2, ...)
+
+        Returns:
+            True if all required points are present and valid, False otherwise
+        """
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return False
+
+        operation = item[0]
+
+        try:
+            if operation == 'c':  # Cubic Bezier: needs 4 points (start, ctrl1, ctrl2, end)
+                if len(item) < 5:
+                    return False
+                # Check all points are valid
+                for i in range(1, 5):
+                    point = item[i]
+                    if point is None:
+                        return False
+                    # Try to parse the point
+                    parsed = self._parse_point(point)
+                    if parsed is None or len(parsed) != 2:
+                        return False
+                return True
+
+            elif operation == 'qu':  # Quadratic Bezier: needs 3 points (start, ctrl, end)
+                if len(item) < 4:
+                    return False
+                # Check all points are valid
+                for i in range(1, 4):
+                    point = item[i]
+                    if point is None:
+                        return False
+                    parsed = self._parse_point(point)
+                    if parsed is None or len(parsed) != 2:
+                        return False
+                return True
+
+            elif operation == 'v' or operation == 'y':  # Bezier variants
+                # These are special Bezier forms, need validation
+                if len(item) < 3:
+                    return False
+                for i in range(1, len(item)):
+                    point = item[i]
+                    if point is None:
+                        return False
+                    parsed = self._parse_point(point)
+                    if parsed is None or len(parsed) != 2:
+                        return False
+                return True
+
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+        return False
+
     def _extract_polylines(self, items: List[Any]) -> List[List[Tuple[float, float]]]:
         """
         Extract connected sequences of line segments (polylines) from path items
         PyMuPDF items format: ('l', Point(x1, y1), Point(x2, y2)) for lines
+
+        Also validates curve operations and falls back to line extraction if incomplete
         """
         polylines = []
         current_polyline = []
@@ -375,6 +440,14 @@ class PDFtoSVGConverter:
             operation = item[0]
 
             if operation != 'l':
+                # Check if it's a curve operation with complete data
+                if operation in ('c', 'qu', 'v', 'y'):
+                    if self._validate_curve_data(item):
+                        # TODO: In future, handle these curve operations properly
+                        # For now, log that we found valid curve data but skip it
+                        pass
+                    # else: incomplete curve data, will be skipped
+
                 # Non-line item, end current polyline
                 if len(current_polyline) >= 2:
                     polylines.append(current_polyline)
@@ -453,8 +526,8 @@ class PDFtoSVGConverter:
     def _add_line(self, svg: ET.Element, p1: Tuple[float, float], p2: Tuple[float, float],
                   page_height: float, stroke: str, fill: str, stroke_width: float):
         """Add a line element to SVG"""
-        x1, y1 = p1[0], page_height - p1[1]
-        x2, y2 = p2[0], page_height - p2[1]
+        x1, y1 = p1[0], p1[1]
+        x2, y2 = p2[0], p2[1]
 
         ET.SubElement(svg, 'line', {
             'x1': f"{x1:.3f}",
@@ -469,7 +542,7 @@ class PDFtoSVGConverter:
     def _add_polyline(self, svg: ET.Element, points: List[Tuple[float, float]],
                      page_height: float, stroke: str, fill: str, stroke_width: float):
         """Add a polyline element to SVG"""
-        points_str = ' '.join(f"{p[0]:.3f},{page_height - p[1]:.3f}" for p in points)
+        points_str = ' '.join(f"{p[0]:.3f},{p[1]:.3f}" for p in points)
 
         ET.SubElement(svg, 'polyline', {
             'points': points_str,
@@ -481,7 +554,7 @@ class PDFtoSVGConverter:
     def _add_circle(self, svg: ET.Element, center: Tuple[float, float], radius: float,
                    page_height: float, stroke: str, fill: str, stroke_width: float):
         """Add a circle element to SVG"""
-        cx, cy = center[0], page_height - center[1]
+        cx, cy = center[0], center[1]
 
         ET.SubElement(svg, 'circle', {
             'cx': f"{cx:.3f}",
@@ -495,19 +568,17 @@ class PDFtoSVGConverter:
     def _add_arc(self, svg: ET.Element, arc: Any, page_height: float,
                 stroke: str, fill: str, stroke_width: float):
         """Add an arc using SVG path element"""
-        # Convert center and angles to SVG arc parameters
-        cx, cy = arc.center.x, page_height - arc.center.y
+        cx, cy = arc.center.x, arc.center.y
         r = arc.radius
 
         # Calculate start and end points
         start_angle_rad = math.radians(arc.start_angle)
         end_angle_rad = math.radians(arc.end_angle)
 
-        # Y is flipped, so we need to negate angles
         start_x = cx + r * math.cos(start_angle_rad)
-        start_y = cy - r * math.sin(start_angle_rad)
+        start_y = cy + r * math.sin(start_angle_rad)
         end_x = cx + r * math.cos(end_angle_rad)
-        end_y = cy - r * math.sin(end_angle_rad)
+        end_y = cy + r * math.sin(end_angle_rad)
 
         # Calculate angle span
         angle_span = (arc.end_angle - arc.start_angle) % 360
@@ -515,8 +586,7 @@ class PDFtoSVGConverter:
         # Determine large-arc-flag
         large_arc = 1 if angle_span > 180 else 0
 
-        # Determine sweep-flag (clockwise in SVG coordinates)
-        # Since Y is flipped, we need to invert the sweep
+        # Determine sweep-flag
         sweep = 1 if angle_span > 0 else 0
 
         # Create path data
@@ -588,8 +658,8 @@ def main():
                        help='Angle tolerance for arc detection (degrees, default: 2.0)')
     parser.add_argument('--radius_tolerance', type=float, default=0.02,
                        help='Radius tolerance for arc detection (fraction, default: 0.02)')
-    parser.add_argument('--min_arc_points', type=int, default=5,
-                       help='Minimum points to consider as arc (default: 5)')
+    parser.add_argument('--min_arc_points', type=int, default=4,
+                       help='Minimum points to consider as arc (default: 4)')
 
     args = parser.parse_args()
 

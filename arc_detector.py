@@ -44,7 +44,7 @@ class Arc:
 
 class ArcDetector:
     def __init__(self, angle_tolerance: float = 5.0, radius_tolerance: float = 0.02,
-                 min_arc_points: int = 8, collinearity_threshold: float = 0.001):
+                 min_arc_points: int = 4, collinearity_threshold: float = 0.001):
         """
         Args:
             angle_tolerance: Max deviation in degrees from expected arc angles
@@ -126,9 +126,11 @@ class ArcDetector:
             curvature_sign = 1 if cross > 0 else -1 if cross < 0 else 0
 
             # Check if this is a straight section
-            deviation_from_straight = abs(math.pi - theta)
-
-            if deviation_from_straight < angle_tolerance_rad:
+            # theta is the angle between consecutive vectors:
+            # - theta ≈ 0 means vectors point in SAME direction (straight line)
+            # - theta ≈ π means vectors point in OPPOSITE directions (sharp reversal)
+            # We want to detect when theta is close to 0 (straight continuation)
+            if theta < angle_tolerance_rad:
                 # Straight section - end current curved segment
                 if len(current_segment) >= self.min_arc_points:
                     segments.append(current_segment)
