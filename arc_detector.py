@@ -44,18 +44,23 @@ class Arc:
 
 class ArcDetector:
     def __init__(self, angle_tolerance: float = 5.0, radius_tolerance: float = 0.02,
-                 min_arc_points: int = 4, collinearity_threshold: float = 0.001):
+                 min_arc_points: int = 4, collinearity_threshold: float = 0.001,
+                 enable_smoothing: bool = True, smoothing_window: int = 5):
         """
         Args:
             angle_tolerance: Max deviation in degrees from expected arc angles
             radius_tolerance: Max relative deviation in radius (0.02 = 2%)
             min_arc_points: Minimum points to consider as arc
             collinearity_threshold: Threshold for detecting straight lines
+            enable_smoothing: Enable zigzag smoothing preprocessing
+            smoothing_window: Window size for moving average smoothing (must be odd)
         """
         self.angle_tolerance = angle_tolerance
         self.radius_tolerance = radius_tolerance
         self.min_arc_points = min_arc_points
         self.collinearity_threshold = collinearity_threshold
+        self.enable_smoothing = enable_smoothing
+        self.smoothing_window = smoothing_window if smoothing_window % 2 == 1 else smoothing_window + 1
 
     def detect_arcs(self, points: List[Tuple[float, float]]) -> List[Arc]:
         """
@@ -69,6 +74,11 @@ class ArcDetector:
 
         points = [Point(p[0], p[1]) for p in points]
 
+        # Preprocessing: Smooth zigzag patterns if enabled
+        if self.enable_smoothing and len(points) >= self.smoothing_window:
+            if self._detect_zigzag_pattern(points):
+                points = self._smooth_polyline(points)
+
         # Step 1: Segment polyline by curvature regions
         curved_segments = self._segment_by_curvature(points)
 
@@ -80,7 +90,217 @@ class ArcDetector:
                 if arc:
                     arcs.append(arc)
 
+        # Step 3: Merge adjacent arcs that are part of the same curve
+        if len(arcs) > 1:
+            arcs = self._merge_adjacent_arcs(arcs)
+
         return arcs
+
+    def _merge_adjacent_arcs(self, arcs: List[Arc]) -> List[Arc]:
+        """
+        Merge adjacent arc segments that are part of the same curve
+
+        This helps handle cases where a single curve gets split into multiple segments
+        """
+        if len(arcs) <= 1:
+            return arcs
+
+        merged = []
+        current_arc = arcs[0]
+
+        for next_arc in arcs[1:]:
+            # Check if arcs are adjacent and have similar center/radius
+            can_merge = False
+
+            # Check if last point of current arc is close to first point of next arc
+            if len(current_arc.points) > 0 and len(next_arc.points) > 0:
+                dist = current_arc.points[-1].distance_to(next_arc.points[0])
+                avg_segment_length = sum(
+                    current_arc.points[i].distance_to(current_arc.points[i+1])
+                    for i in range(len(current_arc.points)-1)
+                ) / max(1, len(current_arc.points)-1)
+
+                # Check if endpoints are adjacent (within 2x average segment length)
+                if dist < 2.0 * avg_segment_length:
+                    # Check if they have similar center and radius
+                    center_dist = current_arc.center.distance_to(next_arc.center)
+                    radius_diff = abs(current_arc.radius - next_arc.radius)
+                    avg_radius = (current_arc.radius + next_arc.radius) / 2
+
+                    if (center_dist < avg_radius * 0.1 and  # Centers within 10% of radius
+                        radius_diff < avg_radius * 0.1):     # Radii within 10%
+                        can_merge = True
+
+            if can_merge:
+                # Merge the arcs
+                merged_points = current_arc.points + next_arc.points[1:]  # Skip duplicate point
+
+                # Recalculate arc parameters
+                avg_center = Point(
+                    (current_arc.center.x + next_arc.center.x) / 2,
+                    (current_arc.center.y + next_arc.center.y) / 2
+                )
+                avg_radius = (current_arc.radius + next_arc.radius) / 2
+
+                # Use angles from first and last arc
+                start_angle = current_arc.start_angle
+                end_angle = next_arc.end_angle
+
+                current_arc = Arc(
+                    center=avg_center,
+                    radius=avg_radius,
+                    start_angle=start_angle,
+                    end_angle=end_angle,
+                    points=merged_points,
+                    is_full_circle=False
+                )
+            else:
+                # Can't merge, save current and move to next
+                merged.append(current_arc)
+                current_arc = next_arc
+
+        # Don't forget the last arc
+        merged.append(current_arc)
+
+        return merged
+
+    def _detect_zigzag_pattern(self, points: List[Point]) -> bool:
+        """
+        Detect if polyline exhibits zigzag pattern (alternating angle deviations)
+
+        Returns True if zigzag pattern detected, False for smooth/straight lines
+        """
+        if len(points) < 4:
+            return False
+
+        # Calculate consecutive angle changes
+        angle_changes = []
+        for i in range(1, len(points) - 1):
+            v1 = Point(points[i].x - points[i-1].x, points[i].y - points[i-1].y)
+            v2 = Point(points[i+1].x - points[i].x, points[i+1].y - points[i].y)
+
+            len_v1 = math.sqrt(v1.x**2 + v1.y**2)
+            len_v2 = math.sqrt(v2.x**2 + v2.y**2)
+
+            if len_v1 < 1e-6 or len_v2 < 1e-6:
+                continue
+
+            v1_norm = Point(v1.x / len_v1, v1.y / len_v1)
+            v2_norm = Point(v2.x / len_v2, v2.y / len_v2)
+
+            # Cross product for direction
+            cross = v1_norm.x * v2_norm.y - v1_norm.y * v2_norm.x
+
+            # Dot product for angle
+            dot = v1_norm.x * v2_norm.x + v1_norm.y * v2_norm.y
+            dot = max(-1.0, min(1.0, dot))
+            angle = math.degrees(math.acos(dot))
+
+            # Store signed angle
+            signed_angle = angle if cross >= 0 else -angle
+            angle_changes.append(signed_angle)
+
+        if len(angle_changes) < 3:
+            return False
+
+        # Check for alternating pattern (zigzag signature)
+        sign_changes = 0
+        for i in range(len(angle_changes) - 1):
+            # Count sign changes in consecutive angles
+            if (angle_changes[i] * angle_changes[i+1]) < 0:
+                sign_changes += 1
+
+        # If more than 50% of angles alternate sign, it's a zigzag
+        alternation_ratio = sign_changes / (len(angle_changes) - 1)
+
+        # Also check if angles have significant magnitude (not just noise)
+        avg_abs_angle = sum(abs(a) for a in angle_changes) / len(angle_changes)
+
+        # Zigzag detected if: high alternation + meaningful angles
+        # Lowered threshold to 0.5° to catch subtle zigzags in PDF rendering
+        is_zigzag = alternation_ratio > 0.5 and avg_abs_angle > 0.5
+
+        return is_zigzag
+
+    def _calculate_overall_direction(self, points: List[Point]) -> Tuple[float, float]:
+        """
+        Calculate the overall direction vector of a polyline using linear regression
+
+        Returns (dx, dy) normalized direction vector
+        """
+        if len(points) < 2:
+            return (0.0, 0.0)
+
+        # Simple approach: direction from first to last point
+        # This gives the general trend
+        dx = points[-1].x - points[0].x
+        dy = points[-1].y - points[0].y
+
+        length = math.sqrt(dx**2 + dy**2)
+        if length < 1e-6:
+            return (0.0, 0.0)
+
+        return (dx / length, dy / length)
+
+    def _smooth_polyline(self, points: List[Point]) -> List[Point]:
+        """
+        Smooth polyline using adaptive moving average to remove zigzag noise
+        while preserving overall curve shape
+
+        Applies iterative smoothing passes for better results
+
+        Args:
+            points: List of Point objects
+
+        Returns:
+            Smoothed list of Point objects
+        """
+        if len(points) < 3:
+            return points
+
+        # Use adaptive window size based on number of points
+        effective_window = min(self.smoothing_window, len(points) // 2)
+        if effective_window % 2 == 0:
+            effective_window += 1
+
+        # Apply multiple smoothing passes for stronger effect
+        # Increased to 3 passes for better handling of subtle zigzags
+        num_passes = 3
+        smoothed = points
+
+        for pass_num in range(num_passes):
+            new_smoothed = []
+            half_window = effective_window // 2
+
+            for i in range(len(smoothed)):
+                if i == 0 or i == len(smoothed) - 1:
+                    # Keep endpoints unchanged
+                    new_smoothed.append(smoothed[i])
+                else:
+                    # Apply weighted moving average
+                    start_idx = max(0, i - half_window)
+                    end_idx = min(len(smoothed), i + half_window + 1)
+
+                    window_points = smoothed[start_idx:end_idx]
+                    center_idx = i - start_idx
+
+                    # Gaussian weights
+                    weights = []
+                    for j in range(len(window_points)):
+                        dist = abs(j - center_idx)
+                        sigma = half_window / 2.0
+                        weight = math.exp(-(dist ** 2) / (2 * sigma ** 2))
+                        weights.append(weight)
+
+                    total_weight = sum(weights)
+                    avg_x = sum(p.x * w for p, w in zip(window_points, weights)) / total_weight
+                    avg_y = sum(p.y * w for p, w in zip(window_points, weights)) / total_weight
+
+                    new_smoothed.append(Point(avg_x, avg_y))
+
+            smoothed = new_smoothed
+
+        return smoothed
 
     def _segment_by_curvature(self, points: List[Point],
                               angle_tolerance_rad: float = None) -> List[List[Point]]:
@@ -175,6 +395,31 @@ class ArcDetector:
         if len(segment) >= 3 and self._are_collinear(segment[0], segment[1], segment[2]):
             return None
 
+        # Additional check: verify the segment has enough curvature
+        # Calculate total angular change
+        total_angle_change = 0
+        for i in range(1, len(segment) - 1):
+            v1 = Point(segment[i].x - segment[i-1].x, segment[i].y - segment[i-1].y)
+            v2 = Point(segment[i+1].x - segment[i].x, segment[i+1].y - segment[i].y)
+
+            len_v1 = math.sqrt(v1.x**2 + v1.y**2)
+            len_v2 = math.sqrt(v2.x**2 + v2.y**2)
+
+            if len_v1 < 1e-6 or len_v2 < 1e-6:
+                continue
+
+            v1_norm = Point(v1.x / len_v1, v1.y / len_v1)
+            v2_norm = Point(v2.x / len_v2, v2.y / len_v2)
+
+            dot = v1_norm.x * v2_norm.x + v1_norm.y * v2_norm.y
+            dot = max(-1.0, min(1.0, dot))
+            angle = math.degrees(math.acos(dot))
+            total_angle_change += angle
+
+        # Require minimum total curvature (at least 10° total change for an arc)
+        if total_angle_change < 10.0:
+            return None
+
         # Try to fit circle to entire segment
         # Use first, middle, and last points for initial circle estimation
         mid_idx = len(segment) // 2
@@ -187,7 +432,8 @@ class ArcDetector:
         radii = [center.distance_to(p) for p in segment]
         avg_radius = sum(radii) / len(radii)
 
-        if avg_radius < 2.0:  # Filter out tiny arcs
+        # Filter out tiny arcs (increased threshold to reduce false positives)
+        if avg_radius < 5.0:
             return None
 
         # Check radius consistency across all points (global fit quality)
@@ -239,8 +485,8 @@ class ArcDetector:
             arc = self._try_fit_arc(points[i:])
             if arc and len(arc.points) >= self.min_arc_points:
                 # Filter out tiny arcs (likely noise or very small features)
-                # Minimum radius of 2.0 units to avoid detecting micro-circles
-                if arc.radius >= 2.0:
+                # Minimum radius of 5.0 units to avoid detecting micro-circles
+                if arc.radius >= 5.0:
                     arcs.append(arc)
                     # Advance by the full arc length to prevent overlapping detections
                     i += len(arc.points)
@@ -547,6 +793,16 @@ class ArcDetector:
         if len(points) < self.min_arc_points:
             return None
 
+        # Convert to Point objects for preprocessing
+        points_obj = [Point(p[0], p[1]) for p in points]
+
+        # Apply smoothing if zigzag detected
+        if self.enable_smoothing and len(points_obj) >= self.smoothing_window:
+            if self._detect_zigzag_pattern(points_obj):
+                points_obj = self._smooth_polyline(points_obj)
+                # Convert back to tuples for closed loop check
+                points = [(p.x, p.y) for p in points_obj]
+
         # Check if it's a closed loop
         if not self.is_closed_loop(points):
             return None
@@ -563,11 +819,10 @@ class ArcDetector:
             return None
 
         # Filter out tiny circles (likely noise)
-        if radius < 2.0:
+        if radius < 5.0:
             return None
 
         # Create full circle arc
-        points_obj = [Point(p[0], p[1]) for p in points]
         return Arc(
             center=center,
             radius=radius,

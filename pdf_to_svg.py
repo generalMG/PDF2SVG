@@ -17,19 +17,25 @@ class PDFtoSVGConverter:
     def __init__(self, arc_detection: bool = True,
                  angle_tolerance: float = 2.0,
                  radius_tolerance: float = 0.02,
-                 min_arc_points: int = 4):
+                 min_arc_points: int = 4,
+                 enable_smoothing: bool = True,
+                 smoothing_window: int = 5):
         """
         Args:
             arc_detection: Enable arc detection from polylines
             angle_tolerance: Max angle deviation for arc detection (degrees)
             radius_tolerance: Max relative radius deviation (0.02 = 2%)
             min_arc_points: Minimum points to consider as arc
+            enable_smoothing: Enable zigzag smoothing preprocessing
+            smoothing_window: Window size for moving average smoothing
         """
         self.arc_detection = arc_detection
         self.detector = ArcDetector(
             angle_tolerance=angle_tolerance,
             radius_tolerance=radius_tolerance,
-            min_arc_points=min_arc_points
+            min_arc_points=min_arc_points,
+            enable_smoothing=enable_smoothing,
+            smoothing_window=smoothing_window
         ) if arc_detection else None
 
     def convert(self, pdf_path: str, output_svg: str = None, page_num: int = 0) -> str:
@@ -660,6 +666,10 @@ def main():
                        help='Radius tolerance for arc detection (fraction, default: 0.02)')
     parser.add_argument('--min_arc_points', type=int, default=4,
                        help='Minimum points to consider as arc (default: 4)')
+    parser.add_argument('--no-smoothing', action='store_true',
+                       help='Disable zigzag smoothing preprocessing')
+    parser.add_argument('--smoothing_window', type=int, default=5,
+                       help='Window size for smoothing (must be odd, default: 5)')
 
     args = parser.parse_args()
 
@@ -668,7 +678,9 @@ def main():
         arc_detection=not args.no_arc_detection,
         angle_tolerance=args.angle_tolerance,
         radius_tolerance=args.radius_tolerance,
-        min_arc_points=args.min_arc_points
+        min_arc_points=args.min_arc_points,
+        enable_smoothing=not args.no_smoothing,
+        smoothing_window=args.smoothing_window
     )
 
     try:
