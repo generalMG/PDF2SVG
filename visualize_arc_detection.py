@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""
+Visualization of Arc Detection Algorithm (AASR)
+
+Shows the complete AASR pipeline:
+1. Input polyline
+2. Curvature segmentation (colored by segment)
+3. Circle fitting for each segment
+4. Validation checks (radius consistency, collinearity)
+5. Final detected arcs with parameters
+"""
+
+import matplotlib.pyplot as plt
+import numpy as np
+import math
+from arc_detector import ArcDetector, Point, Arc
+
+def create_test_paths():
+    """Create various test paths for visualization"""
+    paths = {}
+
+    # 1. Simple arc (90 degrees)
+    center_x, center_y = 100, 100
+    radius = 50
+    arc_90 = []
+    for i in range(25):
+        angle = (i / 24) * (math.pi / 2)  # 0 to 90 degrees
+        x = center_x + radius * math.cos(angle)
+        y = center_y + radius * math.sin(angle)
+        arc_90.append((x, y))
+    paths['90° Arc'] = arc_90
+
+    # 2. Large arc (270 degrees)
+    arc_270 = []
+    for i in range(75):
+        angle = (i / 74) * (3 * math.pi / 2)  # 0 to 270 degrees
+        x = center_x + radius * math.cos(angle)
+        y = center_y + radius * math.sin(angle)
+        arc_270.append((x, y))
+    paths['270° Arc'] = arc_270
+
+    # 3. S-curve (two opposite arcs)
+    s_curve = []
+    # First arc (0 to 180 degrees, one direction)
+    for i in range(25):
+        angle = (i / 24) * math.pi
+        x = 100 + 30 * math.cos(angle)
+        y = 100 + 30 * math.sin(angle)
+        s_curve.append((x, y))
+    # Second arc (opposite direction)
+    for i in range(25):
+        angle = math.pi + (i / 24) * math.pi
+        x = 100 + 30 * math.cos(angle)
+        y = 70 + 30 * math.sin(angle)
+        s_curve.append((x, y))
+    paths['S-Curve'] = s_curve
+
+    # 4. Line-Arc-Line pattern
+    line_arc_line = []
+    # Straight line
+    for i in range(10):
+        line_arc_line.append((50 + i * 3, 100))
+    # Arc
+    for i in range(20):
+        angle = (i / 19) * math.pi
+        x = 80 + 20 * math.cos(angle)
+        y = 100 + 20 * math.sin(angle)
+        line_arc_line.append((x, y))
+    # Straight line
+    for i in range(10):
+        line_arc_line.append((100 + i * 3, 100))
+    paths['Line-Arc-Line'] = line_arc_line
+
+    return paths
+
+def visualize_curvature_segmentation(points, detector, ax):
+    """Visualize the curvature segmentation step"""
+    points_obj = [Point(p[0], p[1]) for p in points]
+
+    # Apply smoothing if needed
+    if detector.enable_smoothing and len(points_obj) >= detector.smoothing_window:
+        if detector._detect_zigzag_pattern(points_obj):
+            points_obj = detector._smooth_polyline(points_obj)
+
+    # Get curved segments
+    segments = detector._segment_by_curvature(points_obj)
+
+    # Plot original polyline
+    x_vals = [p.x for p in points_obj]
+    y_vals = [p.y for p in points_obj]
+    ax.plot(x_vals, y_vals, 'k.-', alpha=0.2, markersize=3, linewidth=0.5, label='Original')
+
+    # Plot each segment with different color
+    colors = plt.cm.rainbow(np.linspace(0, 1, len(segments)))
+    for i, segment in enumerate(segments):
+        seg_x = [p.x for p in segment]
+        seg_y = [p.y for p in segment]
+        ax.plot(seg_x, seg_y, 'o-', color=colors[i], markersize=5, linewidth=2,
+                label=f'Segment {i+1} ({len(segment)} pts)', alpha=0.8)
+
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc='upper right')
+    ax.set_title(f'Curvature Segmentation\n{len(segments)} segment(s) detected')
+
+def visualize_arc_fitting(points, detector, ax):
+    """Visualize the arc fitting process"""
+    points_obj = [Point(p[0], p[1]) for p in points]
+
+    # Apply smoothing if needed
+    if detector.enable_smoothing and len(points_obj) >= detector.smoothing_window:
+        if detector._detect_zigzag_pattern(points_obj):
+            points_obj = detector._smooth_polyline(points_obj)
+
+    # Get segments
+    segments = detector._segment_by_curvature(points_obj)
+
+    # Plot original polyline
+    x_vals = [p.x for p in points_obj]
+    y_vals = [p.y for p in points_obj]
+    ax.plot(x_vals, y_vals, 'k.-', alpha=0.2, markersize=2, linewidth=0.5)
+
+    # Fit and visualize arcs
+    colors = plt.cm.rainbow(np.linspace(0, 1, len(segments)))
+    arc_count = 0
+
+    for i, segment in enumerate(segments):
+        if len(segment) < detector.min_arc_points:
+            continue
+
+        arc = detector._fit_arc_to_segment(segment)
+
+        if arc:
+            arc_count += 1
+            # Plot the segment points
+            seg_x = [p.x for p in segment]
+            seg_y = [p.y for p in segment]
+            ax.plot(seg_x, seg_y, 'o', color=colors[i], markersize=4, alpha=0.6)
+
+            # Plot fitted circle/arc
+            cx, cy = arc.center.x, arc.center.y
+            r = arc.radius
+
+            # Draw circle center
+            ax.plot(cx, cy, 'x', color=colors[i], markersize=10, markeredgewidth=2)
+
+            # Draw fitted arc
+            theta = np.linspace(math.radians(arc.start_angle), math.radians(arc.end_angle), 100)
+            arc_x = cx + r * np.cos(theta)
+            arc_y = cy + r * np.sin(theta)
+            ax.plot(arc_x, arc_y, '-', color=colors[i], linewidth=2, alpha=0.8,
+                   label=f'Arc {arc_count}: r={r:.1f}, {arc.start_angle:.0f}°→{arc.end_angle:.0f}°')
+
+            # Draw radius lines
+            start_x = cx + r * math.cos(math.radians(arc.start_angle))
+            start_y = cy + r * math.sin(math.radians(arc.start_angle))
+            end_x = cx + r * math.cos(math.radians(arc.end_angle))
+            end_y = cy + r * math.sin(math.radians(arc.end_angle))
+
+            ax.plot([cx, start_x], [cy, start_y], '--', color=colors[i], alpha=0.4, linewidth=1)
+            ax.plot([cx, end_x], [cy, end_y], '--', color=colors[i], alpha=0.4, linewidth=1)
+
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=7, loc='upper right')
+    ax.set_title(f'Arc Fitting Results\n{arc_count} arc(s) fitted')
+
+def visualize_radius_deviation(points, detector, ax):
+    """Visualize radius deviation for fitted arcs"""
+    arcs = detector.detect_arcs(points)
+
+    if not arcs:
+        ax.text(0.5, 0.5, 'No arcs detected', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Radius Consistency')
+        return
+
+    for i, arc in enumerate(arcs):
+        radii = [arc.center.distance_to(p) for p in arc.points]
+        avg_radius = arc.radius
+
+        deviations = [(r - avg_radius) / avg_radius * 100 for r in radii]
+
+        ax.plot(range(len(deviations)), deviations, 'o-', label=f'Arc {i+1}', markersize=4)
+
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    ax.axhline(y=detector.radius_tolerance * 100, color='red', linestyle='--',
+               linewidth=1, label=f'Tolerance: ±{detector.radius_tolerance*100:.1f}%')
+    ax.axhline(y=-detector.radius_tolerance * 100, color='red', linestyle='--', linewidth=1)
+
+    ax.set_xlabel('Point Index')
+    ax.set_ylabel('Radius Deviation (%)')
+    ax.set_title('Radius Consistency Check')
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+def visualize_complete_pipeline(path_name, points):
+    """Create comprehensive visualization for one path"""
+    detector = ArcDetector(angle_tolerance=5.0, radius_tolerance=0.02, min_arc_points=4)
+
+    fig = plt.figure(figsize=(16, 12))
+
+    # 1. Input polyline
+    ax1 = plt.subplot(3, 3, 1)
+    x_vals = [p[0] for p in points]
+    y_vals = [p[1] for p in points]
+    ax1.plot(x_vals, y_vals, 'bo-', markersize=4, linewidth=1)
+    ax1.set_aspect('equal')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_title(f'Input: {path_name}\n{len(points)} points')
+
+    # 2. Curvature analysis
+    ax2 = plt.subplot(3, 3, 2)
+    points_obj = [Point(p[0], p[1]) for p in points]
+    if detector.enable_smoothing and len(points_obj) >= detector.smoothing_window:
+        if detector._detect_zigzag_pattern(points_obj):
+            points_obj = detector._smooth_polyline(points_obj)
+
+    # Calculate curvature
+    curvatures = []
+    for i in range(1, len(points_obj) - 1):
+        v1 = Point(points_obj[i].x - points_obj[i-1].x, points_obj[i].y - points_obj[i-1].y)
+        v2 = Point(points_obj[i+1].x - points_obj[i].x, points_obj[i+1].y - points_obj[i].y)
+
+        len_v1 = math.sqrt(v1.x**2 + v1.y**2)
+        len_v2 = math.sqrt(v2.x**2 + v2.y**2)
+
+        if len_v1 > 1e-6 and len_v2 > 1e-6:
+            v1_norm = Point(v1.x / len_v1, v1.y / len_v1)
+            v2_norm = Point(v2.x / len_v2, v2.y / len_v2)
+
+            cross = v1_norm.x * v2_norm.y - v1_norm.y * v2_norm.x
+            dot = v1_norm.x * v2_norm.x + v1_norm.y * v2_norm.y
+            dot = max(-1.0, min(1.0, dot))
+            angle = math.degrees(math.acos(dot))
+
+            signed_angle = angle if cross >= 0 else -angle
+            curvatures.append(signed_angle)
+
+    ax2.plot(range(len(curvatures)), curvatures, 'g-', linewidth=1)
+    ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    ax2.fill_between(range(len(curvatures)), 0, curvatures,
+                     where=[c > 0 for c in curvatures], alpha=0.3, color='red', label='Left turn')
+    ax2.fill_between(range(len(curvatures)), 0, curvatures,
+                     where=[c < 0 for c in curvatures], alpha=0.3, color='blue', label='Right turn')
+    ax2.set_xlabel('Point Index')
+    ax2.set_ylabel('Curvature (degrees)')
+    ax2.set_title('Curvature Analysis')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+
+    # 3. Segmentation
+    ax3 = plt.subplot(3, 3, 3)
+    visualize_curvature_segmentation(points, detector, ax3)
+
+    # 4. Arc fitting
+    ax4 = plt.subplot(3, 3, 4)
+    visualize_arc_fitting(points, detector, ax4)
+
+    # 5. Radius deviation
+    ax5 = plt.subplot(3, 3, 5)
+    visualize_radius_deviation(points, detector, ax5)
+
+    # 6. Final result with full information
+    ax6 = plt.subplot(3, 3, 6)
+    arcs = detector.detect_arcs(points)
+
+    x_vals = [p[0] for p in points]
+    y_vals = [p[1] for p in points]
+    ax6.plot(x_vals, y_vals, 'k.', alpha=0.2, markersize=3)
+
+    info_text = f"Detection Results:\n"
+    info_text += f"Points: {len(points)}\n"
+    info_text += f"Arcs detected: {len(arcs)}\n\n"
+
+    colors = plt.cm.rainbow(np.linspace(0, 1, max(len(arcs), 1)))
+
+    for i, arc in enumerate(arcs):
+        arc_type = detector.classify_arc(arc)
+        info_text += f"Arc {i+1}: {arc_type}\n"
+        info_text += f"  Center: ({arc.center.x:.1f}, {arc.center.y:.1f})\n"
+        info_text += f"  Radius: {arc.radius:.2f}\n"
+        info_text += f"  Angle: {arc.start_angle:.0f}°→{arc.end_angle:.0f}°\n"
+        info_text += f"  Points: {len(arc.points)}\n\n"
+
+        # Draw the arc
+        cx, cy = arc.center.x, arc.center.y
+        r = arc.radius
+        theta = np.linspace(math.radians(arc.start_angle), math.radians(arc.end_angle), 100)
+        arc_x = cx + r * np.cos(theta)
+        arc_y = cy + r * np.sin(theta)
+        ax6.plot(arc_x, arc_y, '-', color=colors[i], linewidth=3, alpha=0.8)
+        ax6.plot(cx, cy, 'x', color=colors[i], markersize=10, markeredgewidth=2)
+
+    ax6.set_aspect('equal')
+    ax6.grid(True, alpha=0.3)
+    ax6.set_title('Final Detection Result')
+
+    # 7. Info panel
+    ax7 = plt.subplot(3, 3, 7)
+    ax7.axis('off')
+    ax7.text(0.1, 0.9, info_text, transform=ax7.transAxes, verticalalignment='top',
+             fontfamily='monospace', fontsize=9,
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # 8. Algorithm parameters
+    ax8 = plt.subplot(3, 3, 8)
+    ax8.axis('off')
+    params_text = "Algorithm Parameters:\n\n"
+    params_text += f"Angle tolerance: {detector.angle_tolerance}°\n"
+    params_text += f"Radius tolerance: {detector.radius_tolerance*100}%\n"
+    params_text += f"Min arc points: {detector.min_arc_points}\n"
+    params_text += f"Smoothing: {detector.enable_smoothing}\n"
+    params_text += f"Smoothing window: {detector.smoothing_window}\n\n"
+    params_text += "Detection Method:\n"
+    params_text += "• Global circle detection\n"
+    params_text += "• AASR (Angle-based\n"
+    params_text += "  Segmentation &\n"
+    params_text += "  Reconstruction)\n"
+
+    ax8.text(0.1, 0.9, params_text, transform=ax8.transAxes, verticalalignment='top',
+             fontfamily='monospace', fontsize=9,
+             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+
+    # 9. Comparison: Original vs Reconstructed
+    ax9 = plt.subplot(3, 3, 9)
+    ax9.plot(x_vals, y_vals, 'k.-', alpha=0.3, markersize=3, linewidth=0.5, label='Original polyline')
+
+    for i, arc in enumerate(arcs):
+        cx, cy = arc.center.x, arc.center.y
+        r = arc.radius
+        theta = np.linspace(math.radians(arc.start_angle), math.radians(arc.end_angle), 100)
+        arc_x = cx + r * np.cos(theta)
+        arc_y = cy + r * np.sin(theta)
+        ax9.plot(arc_x, arc_y, '-', color=colors[i], linewidth=3, alpha=0.8, label=f'Arc {i+1} (fitted)')
+
+    ax9.set_aspect('equal')
+    ax9.grid(True, alpha=0.3)
+    ax9.legend(fontsize=8)
+    ax9.set_title('Original vs Reconstructed')
+
+    plt.suptitle(f'AASR Arc Detection Pipeline: {path_name}', fontsize=14, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+    return fig
+
+def main():
+    paths = create_test_paths()
+
+    for path_name, points in paths.items():
+        print(f"\nProcessing: {path_name}")
+        fig = visualize_complete_pipeline(path_name, points)
+
+        # Save
+        safe_name = path_name.replace('°', 'deg').replace(' ', '_').replace('-', '_')
+        filename = f'output/arc_detection_{safe_name}.png'
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        print(f"✓ Saved: {filename}")
+
+    plt.show()
+
+if __name__ == "__main__":
+    main()
