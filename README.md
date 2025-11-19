@@ -242,8 +242,8 @@ This creates `output/input.svg`
 
 2. **SVG to DXF** (VectorImgAnalysis):
 ```bash
-cd /mnt/d/mg_ai_research/workspace/whatnot/VectorImgAnalysis
-python svg_to_dxf.py /mnt/d/mg_ai_research/workspace/whatnot/PDF2SVG/output/input.svg -o final.dxf
+cd <VectorImgAnalysis repo>
+python svg_to_dxf.py /path/to/PDF2SVG/output/input.svg -o final.dxf
 ```
 
 ### Expected Benefits
@@ -322,6 +322,28 @@ Expected results with hybrid detection:
 **Performance Improvement**: Hybrid approach detects 100% more complete circles compared to AASR-only on high-resolution drawings.
 
 Actual results depend on arc detection parameters and PDF structure.
+
+## Visualization Branch Extras
+
+The `visualization` branch adds a suite of Matplotlib-based tools that showcase each stage of the hybrid arc-detection pipeline. They are useful for debugging, demos, and parameter tuning.
+
+### Included Visualization Scripts
+
+- `visualize_smoothing.py`: Demonstrates zigzag detection and the 3-pass smoothing workflow before arc fitting. Run `python visualize_smoothing.py`.
+- `visualize_arc_detection.py`: Walks through AASR segmentation, arc fitting, and classification for multiple paths. Run `python visualize_arc_detection.py`.
+- `visualize_circle_detection.py`: Explains the global closed-loop detector with centroid, radius, and validation steps. Run `python visualize_circle_detection.py`.
+- `visualize_complete_pipeline.py`: Combines smoothing, global detection, AASR fallback, and classification into a twelve-panel dashboard. Run `python visualize_complete_pipeline.py`.
+
+### Visualization Gallery
+
+| Script | Preview |
+|--------|---------|
+| `visualize_smoothing.py` | ![Smoothing visualization](docs/visualizations/visualize_smoothing.png) |
+| `visualize_arc_detection.py` | ![Arc detection visualization](docs/visualizations/visualize_arc_detection.png) |
+| `visualize_circle_detection.py` | ![Circle detection visualization](docs/visualizations/visualize_circle_detection.png) |
+| `visualize_complete_pipeline.py` | ![Complete pipeline visualization](docs/visualizations/visualize_complete_pipeline.png) |
+
+Each PNG above was generated directly from the scripts using the default parameters (`MPLBACKEND=Agg python <script>.py`). Replace the files by rerunning the scripts after tweaking tolerances to document new behaviors.
 
 ## Performance
 
@@ -406,14 +428,14 @@ Contributions welcome. Focus areas:
 ## Project Files
 
 ### Main Scripts
-- **pdf_to_svg.py** (16KB): Single file converter with CLI
-- **batch_convert.py** (6KB): Parallel batch processor
-- **arc_detector.py** (15KB): Geometric arc detection engine
-- **analyze_pdf.py** (8KB): PDF structure analysis utility
+- **pdf_to_svg.py**: Single file converter with CLI
+- **batch_convert.py**: Parallel batch processor
+- **arc_detector.py**: Geometric arc detection engine
+- **analyze_pdf.py**: PDF structure analysis utility
 
 ### Documentation
-- **README.md** (11KB): Complete documentation
-- **QUICKSTART.md** (2KB): Quick start guide
+- **README.md**: Complete documentation
+- **QUICKSTART.md**: Quick start guide
 - **requirements.txt**: PyMuPDF dependency
 
 ### Output
@@ -424,7 +446,7 @@ Contributions welcome. Focus areas:
 ## Related Projects
 
 **VectorImgAnalysis**: SVG to DXF converter
-- Location: `/mnt/d/mg_ai_research/workspace/whatnot/VectorImgAnalysis`
+- Location: `/path/to/VectorImgAnalysis`
 - Handles SVG path parsing and DXF entity generation
 - Supports arcs, circles, ellipses, splines
 
