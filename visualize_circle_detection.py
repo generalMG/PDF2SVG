@@ -17,6 +17,7 @@ from arc_detector import ArcDetector, Point
 def create_circles_with_varying_resolution():
     """Create circles with different point counts"""
     circles = {}
+    expected = {}
     center_x, center_y = 100, 100
     radius = 50
 
@@ -28,17 +29,23 @@ def create_circles_with_varying_resolution():
             y = center_y + radius * math.sin(angle)
             points.append((x, y))
 
-        circles[f'{num_points} points'] = points
+        name = f'{num_points} points'
+        circles[name] = points
+        expected[name] = {
+            'should_detect_global': True,
+            'description': f'Full circle with {num_points} points'
+        }
 
-    return circles
+    return circles, expected
 
 def create_partial_arcs():
     """Create partial arcs (not closed loops)"""
     arcs = {}
+    expected = {}
     center_x, center_y = 100, 100
     radius = 50
 
-    # 90 degree arc
+    # 90 degree arc - should NOT be detected as circle
     arc_90 = []
     for i in range(25):
         angle = (i / 24) * (math.pi / 2)
@@ -46,8 +53,12 @@ def create_partial_arcs():
         y = center_y + radius * math.sin(angle)
         arc_90.append((x, y))
     arcs['90° arc'] = arc_90
+    expected['90° arc'] = {
+        'should_detect_global': False,
+        'description': 'Partial arc - not a closed loop'
+    }
 
-    # 270 degree arc
+    # 270 degree arc - should NOT be detected as circle
     arc_270 = []
     for i in range(75):
         angle = (i / 74) * (3 * math.pi / 2)
@@ -55,8 +66,12 @@ def create_partial_arcs():
         y = center_y + radius * math.sin(angle)
         arc_270.append((x, y))
     arcs['270° arc'] = arc_270
+    expected['270° arc'] = {
+        'should_detect_global': False,
+        'description': 'Partial arc - not a closed loop'
+    }
 
-    # Almost complete (350 degrees)
+    # Almost complete (350 degrees) - should NOT be detected as circle
     arc_350 = []
     for i in range(95):
         angle = (i / 94) * (350 * math.pi / 180)
@@ -64,8 +79,12 @@ def create_partial_arcs():
         y = center_y + radius * math.sin(angle)
         arc_350.append((x, y))
     arcs['350° arc'] = arc_350
+    expected['350° arc'] = {
+        'should_detect_global': False,
+        'description': 'Almost complete - gap too large'
+    }
 
-    return arcs
+    return arcs, expected
 
 def visualize_closed_loop_check(points, detector, ax):
     """Visualize closed loop check"""
@@ -206,7 +225,7 @@ def visualize_radius_consistency_check(points, detector, ax):
     ax.legend(fontsize=8)
     ax.set_title('Radius Consistency Check')
 
-def visualize_global_vs_aasr(points, detector, ax1, ax2):
+def visualize_global_vs_aasr(points, detector, ax1, ax2, expected_result=None):
     """Compare global and AASR detection"""
     # Global detection
     global_result = detector.detect_circle_global(points)
@@ -232,9 +251,22 @@ def visualize_global_vs_aasr(points, detector, ax1, ax2):
     else:
         result_text = "✗ No circle detected"
 
+    # Add pass/fail status if expected result provided
+    if expected_result:
+        should_detect = expected_result.get('should_detect_global', None)
+        if should_detect is not None:
+            matches = (global_result is not None) == should_detect
+            status = "PASS" if matches else "FAIL"
+            result_text += f" ({status})"
+            box_color = 'lightgreen' if matches else 'lightcoral'
+        else:
+            box_color = 'lightgreen' if global_result else 'lightcoral'
+    else:
+        box_color = 'lightgreen' if global_result else 'lightcoral'
+
     ax1.text(0.5, 0.95, result_text, transform=ax1.transAxes,
              ha='center', va='top', fontsize=12, fontweight='bold',
-             bbox=dict(boxstyle='round', facecolor='lightgreen' if global_result else 'lightcoral', alpha=0.8))
+             bbox=dict(boxstyle='round', facecolor=box_color, alpha=0.8))
 
     ax1.set_aspect('equal')
     ax1.grid(True, alpha=0.3)
@@ -272,6 +304,42 @@ def visualize_global_vs_aasr(points, detector, ax1, ax2):
     ax2.legend(fontsize=8)
     ax2.set_title('AASR Detection\n(Segmentation-based)')
 
+def print_test_header(suite_name):
+    """Print standardized test header"""
+    print("\n" + "="*80)
+    print(f"CIRCLE DETECTION TEST SUITE - {suite_name}")
+    print("="*80)
+
+def print_test_result(test_name, expected, actual, details=None):
+    """Print standardized test result"""
+    print("\n" + "-"*80)
+    print(f"TEST: {test_name}")
+    if details:
+        print(f"DESCRIPTION: {details.get('description', 'N/A')}")
+    print("-"*80)
+    print(f"EXPECTED: {expected}")
+    print(f"ACTUAL:   {actual}")
+
+    matches = (expected == actual)
+    status = "✓ PASS" if matches else "✗ FAIL"
+    print(f"STATUS:   {status}")
+
+    if details and 'additional_info' in details:
+        print(f"DETAILS:  {details['additional_info']}")
+    print("-"*80)
+
+    return matches
+
+def print_summary(total, passed, failed):
+    """Print standardized test summary"""
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    print(f"Total Tests:  {total}")
+    print(f"Passed:       {passed} ({(passed/total*100):.1f}%)")
+    print(f"Failed:       {failed} ({(failed/total*100):.1f}%)")
+    print("="*80 + "\n")
+
 def main():
     import argparse
 
@@ -303,16 +371,44 @@ Examples:
         smoothing_window=args.smoothing_window
     )
 
-    # Test 1: Circles with varying resolution
-    print("\n" + "="*60)
-    print("Test 1: Circles with varying resolution")
-    print("="*60)
+    # Track all test results
+    all_test_results = []
 
-    circles = create_circles_with_varying_resolution()
+    # Test 1: Circles with varying resolution
+    print_test_header("Global Circle Detection (Closed Loops)")
+    print(f"Algorithm: Fast O(n) global circle detection")
+    print(f"Parameters:")
+    print(f"  - Radius tolerance: {args.radius_tolerance*100}%")
+    print(f"  - Closure check: 1.5 × avg segment length")
+
+    circles, circle_expected = create_circles_with_varying_resolution()
 
     for circle_name, points in circles.items():
-        print(f"\nProcessing: {circle_name}")
+        expected = circle_expected.get(circle_name)
 
+        # Run detection
+        global_result = detector.detect_circle_global(points)
+
+        # Print test result
+        should_detect = expected.get('should_detect_global', False)
+        detected = (global_result is not None)
+
+        details = {
+            'description': expected.get('description', 'N/A'),
+            'additional_info': f"{'Detected circle' if detected else 'No circle detected'} from {len(points)} input points"
+        }
+
+        passed = print_test_result(
+            circle_name,
+            "Circle detected" if should_detect else "No circle detected",
+            "Circle detected" if detected else "No circle detected",
+            details
+        )
+
+        all_test_results.append(passed)
+
+        # Generate visualization
+        print(f"Generating visualization...")
         fig = plt.figure(figsize=(16, 10))
 
         # Row 1: Input and checks
@@ -336,9 +432,19 @@ Examples:
         # Row 2: Comparison
         ax5 = plt.subplot(2, 3, 5)
         ax6 = plt.subplot(2, 3, 6)
-        visualize_global_vs_aasr(points, detector, ax5, ax6)
+        visualize_global_vs_aasr(points, detector, ax5, ax6, expected)
 
-        plt.suptitle(f'Global Circle Detection: {circle_name}', fontsize=14, fontweight='bold')
+        # Enhanced title with expected result
+        title = f'Global Circle Detection: {circle_name}'
+        if expected:
+            desc = expected.get('description', '')
+            should_detect = expected.get('should_detect_global', None)
+            global_result = detector.detect_circle_global(points)
+            if should_detect is not None:
+                matches = (global_result is not None) == should_detect
+                status = "✓ PASS" if matches else "✗ FAIL"
+                title += f'\nExpected: {desc} | Result: {status}'
+        plt.suptitle(title, fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
         # Save
@@ -348,15 +454,37 @@ Examples:
         print(f"✓ Saved: {filename}")
 
     # Test 2: Partial arcs (should NOT be detected as circles)
-    print("\n" + "="*60)
-    print("Test 2: Partial arcs (should fail closed loop check)")
-    print("="*60)
+    print_test_header("Global Circle Detection (Partial Arcs - Should Fail)")
+    print(f"Testing that partial arcs correctly fail the closed loop check")
 
-    arcs = create_partial_arcs()
+    arcs, arc_expected = create_partial_arcs()
 
     for arc_name, points in arcs.items():
-        print(f"\nProcessing: {arc_name}")
+        expected = arc_expected.get(arc_name)
 
+        # Run detection
+        global_result = detector.detect_circle_global(points)
+
+        # Print test result
+        should_detect = expected.get('should_detect_global', False)
+        detected = (global_result is not None)
+
+        details = {
+            'description': expected.get('description', 'N/A'),
+            'additional_info': f"{'Detected circle (WRONG!)' if detected else 'Correctly rejected'} from {len(points)} input points"
+        }
+
+        passed = print_test_result(
+            arc_name,
+            "Circle detected" if should_detect else "No circle detected",
+            "Circle detected" if detected else "No circle detected",
+            details
+        )
+
+        all_test_results.append(passed)
+
+        # Generate visualization
+        print(f"Generating visualization...")
         fig = plt.figure(figsize=(16, 10))
 
         ax1 = plt.subplot(2, 3, 1)
@@ -378,9 +506,19 @@ Examples:
 
         ax5 = plt.subplot(2, 3, 5)
         ax6 = plt.subplot(2, 3, 6)
-        visualize_global_vs_aasr(points, detector, ax5, ax6)
+        visualize_global_vs_aasr(points, detector, ax5, ax6, expected)
 
-        plt.suptitle(f'Global Circle Detection: {arc_name}', fontsize=14, fontweight='bold')
+        # Enhanced title with expected result
+        title = f'Global Circle Detection: {arc_name}'
+        if expected:
+            desc = expected.get('description', '')
+            should_detect = expected.get('should_detect_global', None)
+            global_result = detector.detect_circle_global(points)
+            if should_detect is not None:
+                matches = (global_result is not None) == should_detect
+                status = "✓ PASS" if matches else "✗ FAIL"
+                title += f'\nExpected: {desc} | Result: {status}'
+        plt.suptitle(title, fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
         # Save
@@ -388,6 +526,12 @@ Examples:
         filename = f'output/circle_detection_{safe_name}.png'
         plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
+
+    # Print overall summary
+    total = len(all_test_results)
+    passed = sum(all_test_results)
+    failed = total - passed
+    print_summary(total, passed, failed)
 
     plt.show()
 

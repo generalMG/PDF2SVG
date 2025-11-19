@@ -18,8 +18,9 @@ from arc_detector import ArcDetector, Point, Arc
 def create_test_paths():
     """Create various test paths for visualization"""
     paths = {}
+    expected = {}
 
-    # 1. Simple arc (90 degrees)
+    # 1. Simple arc (90 degrees) - SHOULD DETECT 1 arc
     center_x, center_y = 100, 100
     radius = 50
     arc_90 = []
@@ -29,8 +30,9 @@ def create_test_paths():
         y = center_y + radius * math.sin(angle)
         arc_90.append((x, y))
     paths['90° Arc'] = arc_90
+    expected['90° Arc'] = {'should_detect': True, 'expected_arcs': 1, 'description': 'Single 90° arc'}
 
-    # 2. Large arc (270 degrees)
+    # 2. Large arc (270 degrees) - SHOULD DETECT 1 arc
     arc_270 = []
     for i in range(75):
         angle = (i / 74) * (3 * math.pi / 2)  # 0 to 270 degrees
@@ -38,8 +40,9 @@ def create_test_paths():
         y = center_y + radius * math.sin(angle)
         arc_270.append((x, y))
     paths['270° Arc'] = arc_270
+    expected['270° Arc'] = {'should_detect': True, 'expected_arcs': 1, 'description': 'Single 270° arc'}
 
-    # 3. S-curve (smooth continuous curve with changing curvature direction)
+    # 3. S-curve (smooth continuous curve with changing curvature direction) - SHOULD DETECT 2 arcs
     # Use parametric sine wave to create smooth S-shape
     s_curve = []
     amplitude = 30
@@ -50,8 +53,9 @@ def create_test_paths():
         y = 100 + t * height
         s_curve.append((x, y))
     paths['S-Curve'] = s_curve
+    expected['S-Curve'] = {'should_detect': True, 'expected_arcs': 2, 'description': 'Two arcs with opposite curvature'}
 
-    # 4. Line-Arc-Line pattern
+    # 4. Line-Arc-Line pattern - SHOULD DETECT 1 arc (ignore straight sections)
     line_arc_line = []
     # Straight line
     for i in range(10):
@@ -66,8 +70,9 @@ def create_test_paths():
     for i in range(10):
         line_arc_line.append((100 + i * 3, 100))
     paths['Line-Arc-Line'] = line_arc_line
+    expected['Line-Arc-Line'] = {'should_detect': True, 'expected_arcs': 1, 'description': 'One arc between straight lines'}
 
-    return paths
+    return paths, expected
 
 def visualize_curvature_segmentation(points, detector, ax):
     """Visualize the curvature segmentation step"""
@@ -189,7 +194,7 @@ def visualize_radius_deviation(points, detector, ax):
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-def visualize_complete_pipeline(path_name, points, detector=None):
+def visualize_complete_pipeline(path_name, points, detector=None, expected_result=None):
     """Create comprehensive visualization for one path"""
     if detector is None:
         detector = ArcDetector(angle_tolerance=5.0, radius_tolerance=0.02, min_arc_points=4)
@@ -265,9 +270,24 @@ def visualize_complete_pipeline(path_name, points, detector=None):
     y_vals = [p[1] for p in points]
     ax6.plot(x_vals, y_vals, 'k.', alpha=0.2, markersize=3)
 
+    # Build info text with expected vs actual
     info_text = f"Detection Results:\n"
     info_text += f"Points: {len(points)}\n"
-    info_text += f"Arcs detected: {len(arcs)}\n\n"
+    info_text += f"Arcs detected: {len(arcs)}\n"
+
+    # Add expected vs actual comparison
+    if expected_result:
+        expected_arcs = expected_result.get('expected_arcs', '?')
+        matches = (len(arcs) == expected_arcs)
+        status = "✓ PASS" if matches else "✗ FAIL"
+        status_color = "green" if matches else "red"
+        info_text += f"\n{'='*30}\n"
+        info_text += f"Expected: {expected_arcs} arc(s)\n"
+        info_text += f"Actual:   {len(arcs)} arc(s)\n"
+        info_text += f"Status:   {status}\n"
+        info_text += f"{'='*30}\n"
+
+    info_text += "\n"
 
     colors = plt.cm.rainbow(np.linspace(0, 1, max(len(arcs), 1)))
 
@@ -295,9 +315,17 @@ def visualize_complete_pipeline(path_name, points, detector=None):
     # 7. Info panel
     ax7 = plt.subplot(3, 3, 7)
     ax7.axis('off')
+
+    # Determine box color based on pass/fail
+    box_color = 'wheat'
+    if expected_result:
+        expected_arcs = expected_result.get('expected_arcs', None)
+        if expected_arcs is not None:
+            box_color = 'lightgreen' if len(arcs) == expected_arcs else 'lightcoral'
+
     ax7.text(0.1, 0.9, info_text, transform=ax7.transAxes, verticalalignment='top',
              fontfamily='monospace', fontsize=9,
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+             bbox=dict(boxstyle='round', facecolor=box_color, alpha=0.5))
 
     # 8. Algorithm parameters
     ax8 = plt.subplot(3, 3, 8)
@@ -335,10 +363,55 @@ def visualize_complete_pipeline(path_name, points, detector=None):
     ax9.legend(fontsize=8)
     ax9.set_title('Original vs Reconstructed')
 
-    plt.suptitle(f'AASR Arc Detection Pipeline: {path_name}', fontsize=14, fontweight='bold')
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    # Add expected result description to title
+    title = f'AASR Arc Detection Pipeline: {path_name}'
+    if expected_result:
+        desc = expected_result.get('description', '')
+        expected_arcs = expected_result.get('expected_arcs', '?')
+        matches = (len(arcs) == expected_arcs)
+        status = "✓ PASS" if matches else "✗ FAIL"
+        title += f'\nExpected: {desc} | Result: {status}'
+
+    plt.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     return fig
+
+def print_test_header():
+    """Print standardized test header"""
+    print("\n" + "="*80)
+    print("ARC DETECTION TEST SUITE - AASR Algorithm")
+    print("="*80)
+
+def print_test_result(test_name, expected, actual, details=None):
+    """Print standardized test result"""
+    print("\n" + "-"*80)
+    print(f"TEST: {test_name}")
+    if details:
+        print(f"DESCRIPTION: {details.get('description', 'N/A')}")
+    print("-"*80)
+    print(f"EXPECTED: {expected}")
+    print(f"ACTUAL:   {actual}")
+
+    matches = (expected == actual)
+    status = "✓ PASS" if matches else "✗ FAIL"
+    print(f"STATUS:   {status}")
+
+    if details and 'additional_info' in details:
+        print(f"DETAILS:  {details['additional_info']}")
+    print("-"*80)
+
+    return matches
+
+def print_summary(total, passed, failed):
+    """Print standardized test summary"""
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    print(f"Total Tests:  {total}")
+    print(f"Passed:       {passed} ({(passed/total*100):.1f}%)")
+    print(f"Failed:       {failed} ({(failed/total*100):.1f}%)")
+    print("="*80 + "\n")
 
 def main():
     import argparse
@@ -372,17 +445,59 @@ Examples:
         smoothing_window=args.smoothing_window
     )
 
-    paths = create_test_paths()
+    paths, expected_results = create_test_paths()
+
+    # Print test header
+    print_test_header()
+    print(f"Algorithm: AASR (Angle-based Arc Segmentation & Reconstruction)")
+    print(f"Parameters:")
+    print(f"  - Angle tolerance: {args.angle_tolerance}°")
+    print(f"  - Radius tolerance: {args.radius_tolerance*100}%")
+    print(f"  - Min arc points: {args.min_arc_points}")
+    print(f"  - Smoothing enabled: {not args.no_smoothing}")
+
+    # Track test results
+    test_results = []
 
     for path_name, points in paths.items():
-        print(f"\nProcessing: {path_name}")
-        fig = visualize_complete_pipeline(path_name, points, detector)
+        expected = expected_results.get(path_name)
+
+        # Run detection
+        arcs = detector.detect_arcs(points)
+
+        # Print test result
+        expected_arcs = expected.get('expected_arcs', 0)
+        actual_arcs = len(arcs)
+
+        details = {
+            'description': expected.get('description', 'N/A'),
+            'additional_info': f"Detected {actual_arcs} arc(s) from {len(points)} input points"
+        }
+
+        passed = print_test_result(
+            path_name,
+            f"{expected_arcs} arc(s)",
+            f"{actual_arcs} arc(s)",
+            details
+        )
+
+        test_results.append(passed)
+
+        # Generate visualization
+        print(f"Generating visualization...")
+        fig = visualize_complete_pipeline(path_name, points, detector, expected)
 
         # Save
         safe_name = path_name.replace('°', 'deg').replace(' ', '_').replace('-', '_')
         filename = f'output/arc_detection_{safe_name}.png'
         plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
+
+    # Print summary
+    total = len(test_results)
+    passed = sum(test_results)
+    failed = total - passed
+    print_summary(total, passed, failed)
 
     plt.show()
 

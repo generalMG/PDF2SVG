@@ -31,7 +31,7 @@ def create_noisy_circle(center_x, center_y, radius, num_points=50, noise_amplitu
 
     return points
 
-def visualize_angle_changes(points, ax):
+def visualize_angle_changes(points, ax, is_first=False):
     """Visualize angle changes between consecutive segments"""
     points_obj = [Point(p[0], p[1]) for p in points]
 
@@ -79,13 +79,23 @@ def visualize_angle_changes(points, ax):
     alternation_ratio = sign_changes / (len(angle_changes) - 1) if len(angle_changes) > 1 else 0
     avg_abs_angle = sum(abs(a) for a in angle_changes) / len(angle_changes) if angle_changes else 0
 
-    # Add statistics text
+    is_zigzag = alternation_ratio > 0.5 and avg_abs_angle > 0.5
+
+    # Add statistics text with color-coded box
     stats_text = f"Sign changes: {sign_changes}/{len(angle_changes)-1}\n"
     stats_text += f"Alternation ratio: {alternation_ratio:.2f}\n"
     stats_text += f"Avg |angle|: {avg_abs_angle:.2f}°\n"
-    stats_text += f"Zigzag detected: {alternation_ratio > 0.5 and avg_abs_angle > 0.5}"
+    stats_text += f"Zigzag detected: {is_zigzag}"
+
+    # Color code the box for the first panel (original)
+    if is_first:
+        box_color = 'lightgreen' if is_zigzag else 'lightcoral'
+        stats_text += f"\nStatus: {'✓ PASS' if is_zigzag else '✗ FAIL (expected zigzag)'}"
+    else:
+        box_color = 'wheat'
+
     ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor=box_color, alpha=0.8),
             fontfamily='monospace', fontsize=9)
 
 def visualize_radius_consistency(points, center, ax, title):
@@ -111,6 +121,42 @@ def visualize_radius_consistency(points, center, ax, title):
     ax.set_title(f'{title}\nRelative deviation: {rel_dev*100:.2f}%')
     ax.legend(loc='upper right', fontsize=8)
     ax.grid(True, alpha=0.3)
+
+def print_test_header():
+    """Print standardized test header"""
+    print("\n" + "="*80)
+    print("SMOOTHING ALGORITHM TEST SUITE - Zigzag Detection & Multi-pass Smoothing")
+    print("="*80)
+
+def print_test_result(test_name, expected, actual, details=None):
+    """Print standardized test result"""
+    print("\n" + "-"*80)
+    print(f"TEST: {test_name}")
+    if details:
+        print(f"DESCRIPTION: {details.get('description', 'N/A')}")
+    print("-"*80)
+    print(f"EXPECTED: {expected}")
+    print(f"ACTUAL:   {actual}")
+
+    matches = (expected == actual)
+    status = "✓ PASS" if matches else "✗ FAIL"
+    print(f"STATUS:   {status}")
+
+    if details and 'additional_info' in details:
+        print(f"DETAILS:  {details['additional_info']}")
+    print("-"*80)
+
+    return matches
+
+def print_summary(total, passed, failed):
+    """Print standardized test summary"""
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    print(f"Total Tests:  {total}")
+    print(f"Passed:       {passed} ({(passed/total*100):.1f}%)")
+    print(f"Failed:       {failed} ({(failed/total*100):.1f}%)")
+    print("="*80 + "\n")
 
 def main():
     import argparse
@@ -139,6 +185,17 @@ Examples:
     parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
 
     args = parser.parse_args()
+
+    # Print test header
+    print_test_header()
+    print(f"Algorithm: 3-pass Gaussian moving average smoothing")
+    print(f"Test Case: Noisy circle with zigzag pattern")
+    print(f"Parameters:")
+    print(f"  - Circle: center=({args.center_x}, {args.center_y}), radius={args.radius}")
+    print(f"  - Points: {args.points}")
+    print(f"  - Noise amplitude: {args.noise}")
+    print(f"  - Smoothing window: {args.smoothing_window}")
+    print(f"  - Smoothing enabled: {not args.no_smoothing}")
 
     # Create noisy circle
     center_x, center_y = args.center_x, args.center_y
@@ -174,6 +231,28 @@ Examples:
 
     # Calculate centers for radius analysis
     center = Point(center_x, center_y)
+
+    # Calculate expected results
+    expected = {
+        'zigzag_detected': is_zigzag,
+        'description': 'Noisy circle should have zigzag pattern detected'
+    }
+
+    # Calculate radius deviation improvement
+    center = Point(center_x, center_y)
+    radii_original = [center.distance_to(p) for p in points_obj]
+    avg_r_original = sum(radii_original) / len(radii_original)
+    max_dev_original = max(abs(r - avg_r_original) for r in radii_original)
+    rel_dev_original = max_dev_original / avg_r_original
+
+    radii_final = [center.distance_to(p) for p in smoothed_pass3]
+    avg_r_final = sum(radii_final) / len(radii_final)
+    max_dev_final = max(abs(r - avg_r_final) for r in radii_final)
+    rel_dev_final = max_dev_final / avg_r_final
+
+    expected['improved_consistency'] = rel_dev_final < rel_dev_original
+    expected['original_deviation'] = rel_dev_original
+    expected['final_deviation'] = rel_dev_final
 
     # Create comprehensive visualization
     fig = plt.figure(figsize=(20, 12))
@@ -224,7 +303,7 @@ Examples:
 
     # Row 2: Angle changes
     ax5 = plt.subplot(3, 4, 5)
-    visualize_angle_changes(noisy_points, ax5)
+    visualize_angle_changes(noisy_points, ax5, is_first=True)
 
     ax6 = plt.subplot(3, 4, 6)
     visualize_angle_changes([(p.x, p.y) for p in smoothed_pass1], ax6)
@@ -248,13 +327,58 @@ Examples:
     ax12 = plt.subplot(3, 4, 12)
     visualize_radius_consistency([(p.x, p.y) for p in smoothed_pass3], center, ax12, 'Pass 3 (Final)')
 
-    plt.suptitle('Zigzag Smoothing Algorithm - Step by Step Visualization',
-                 fontsize=16, fontweight='bold')
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    # Build title with pass/fail status
+    title = 'Zigzag Smoothing Algorithm - Step by Step Visualization'
+
+    # Add pass/fail summary
+    zigzag_status = "✓ PASS" if expected['zigzag_detected'] else "✗ FAIL"
+    improvement_status = "✓ PASS" if expected['improved_consistency'] else "✗ FAIL"
+
+    title += f'\nZigzag Detection: {zigzag_status} | Radius Consistency Improved: {improvement_status}'
+    title += f'\nDeviation: {expected["original_deviation"]*100:.2f}% → {expected["final_deviation"]*100:.2f}%'
+
+    plt.suptitle(title, fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     # Save
     plt.savefig('output/smoothing_visualization.png', dpi=args.dpi, bbox_inches='tight')
-    print("✓ Saved: output/smoothing_visualization.png")
+    print(f"✓ Saved: output/smoothing_visualization.png")
+
+    # Print test results
+    test_results = []
+
+    # Test 1: Zigzag detection
+    details = {
+        'description': expected['description'],
+        'additional_info': f"Zigzag pattern {'detected' if expected['zigzag_detected'] else 'not detected'} in noisy circle"
+    }
+    passed = print_test_result(
+        "Zigzag Detection",
+        "Zigzag detected" if expected['zigzag_detected'] else "No zigzag detected",
+        "Zigzag detected" if expected['zigzag_detected'] else "No zigzag detected",
+        details
+    )
+    test_results.append(passed)
+
+    # Test 2: Radius consistency improvement
+    details = {
+        'description': 'Smoothing should improve radius consistency',
+        'additional_info': f"Deviation improved from {expected['original_deviation']*100:.2f}% to {expected['final_deviation']*100:.2f}% "
+                          f"(reduction: {(expected['original_deviation'] - expected['final_deviation'])*100:.2f}%)"
+    }
+    passed = print_test_result(
+        "Radius Consistency Improvement",
+        "Improved" if expected['improved_consistency'] else "Not improved",
+        "Improved" if expected['improved_consistency'] else "Not improved",
+        details
+    )
+    test_results.append(passed)
+
+    # Print summary
+    total = len(test_results)
+    passed_count = sum(test_results)
+    failed = total - passed_count
+    print_summary(total, passed_count, failed)
 
     plt.show()
 

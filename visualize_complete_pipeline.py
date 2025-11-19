@@ -26,10 +26,13 @@ def create_comprehensive_test_case():
     # 3. An S-curve
     # 4. A straight line
 
+    test_cases = {}
+    expected = {}
+
     center_x, center_y = 150, 150
     radius = 40
 
-    # 1. Noisy full circle
+    # 1. Noisy full circle - SHOULD DETECT 1 circle via global detection
     noisy_circle = []
     for i in range(60):
         angle = (i / 60) * 2 * math.pi
@@ -43,7 +46,14 @@ def create_comprehensive_test_case():
 
         noisy_circle.append((x, y))
 
-    # 2. Clean 180-degree arc (semicircle)
+    test_cases['Noisy Circle'] = noisy_circle
+    expected['Noisy Circle'] = {
+        'expected_arcs': 1,
+        'description': 'Full circle with noise',
+        'should_use_global': True
+    }
+
+    # 2. Clean 180-degree arc (semicircle) - SHOULD DETECT 1 arc
     clean_arc = []
     for i in range(30):
         angle = (i / 29) * math.pi
@@ -51,7 +61,14 @@ def create_comprehensive_test_case():
         y = 150 + 35 * math.sin(angle)
         clean_arc.append((x, y))
 
-    # 3. S-curve (smooth continuous curve with changing curvature direction)
+    test_cases['Clean Semicircle'] = clean_arc
+    expected['Clean Semicircle'] = {
+        'expected_arcs': 1,
+        'description': 'Single 180° arc',
+        'should_use_global': False
+    }
+
+    # 3. S-curve (smooth continuous curve with changing curvature direction) - SHOULD DETECT 2 arcs
     # Use parametric sine wave to create smooth S-shape
     s_curve = []
     amplitude = 25
@@ -63,19 +80,28 @@ def create_comprehensive_test_case():
         y = base_y + t * height
         s_curve.append((x, y))
 
-    # 4. Straight line
+    test_cases['S-Curve'] = s_curve
+    expected['S-Curve'] = {
+        'expected_arcs': 2,
+        'description': 'Two arcs with opposite curvature',
+        'should_use_global': False
+    }
+
+    # 4. Straight line - SHOULD DETECT 0 arcs
     straight_line = []
     for i in range(20):
         straight_line.append((250 + i * 3, 280))
 
-    return {
-        'Noisy Circle': noisy_circle,
-        'Clean Semicircle': clean_arc,
-        'S-Curve': s_curve,
-        'Straight Line': straight_line
+    test_cases['Straight Line'] = straight_line
+    expected['Straight Line'] = {
+        'expected_arcs': 0,
+        'description': 'Straight line - no arcs',
+        'should_use_global': False
     }
 
-def visualize_pipeline_step_by_step(points, title, detector):
+    return test_cases, expected
+
+def visualize_pipeline_step_by_step(points, title, detector, expected_result=None):
     """Create a comprehensive step-by-step visualization"""
     fig = plt.figure(figsize=(20, 14))
 
@@ -240,9 +266,26 @@ def visualize_pipeline_step_by_step(points, title, detector):
         info_text += "• Insufficient points\n"
         info_text += "• Irregular curvature\n"
 
+    # Add expected vs actual comparison
+    if expected_result:
+        expected_arcs = expected_result.get('expected_arcs', '?')
+        matches = (len(arcs) == expected_arcs)
+        status = "✓ PASS" if matches else "✗ FAIL"
+        info_text += f"\n{'='*30}\n"
+        info_text += f"Expected: {expected_arcs} arc(s)\n"
+        info_text += f"Actual:   {len(arcs)} arc(s)\n"
+        info_text += f"Status:   {status}\n"
+
+    # Determine box color based on pass/fail
+    box_color = 'wheat'
+    if expected_result:
+        expected_arcs = expected_result.get('expected_arcs', None)
+        if expected_arcs is not None:
+            box_color = 'lightgreen' if len(arcs) == expected_arcs else 'lightcoral'
+
     ax7.text(0.1, 0.9, info_text, transform=ax7.transAxes, verticalalignment='top',
              fontfamily='monospace', fontsize=9,
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+             bbox=dict(boxstyle='round', facecolor=box_color, alpha=0.5))
     ax7.set_title('Step 7: Classification')
 
     # Step 8: Comparison (Original vs Detected)
@@ -365,10 +408,55 @@ def visualize_pipeline_step_by_step(points, title, detector):
               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5))
     ax12.set_title('Decision Flow')
 
-    plt.suptitle(f'Complete Arc Detection Pipeline: {title}', fontsize=16, fontweight='bold')
+    # Add expected result to title
+    main_title = f'Complete Arc Detection Pipeline: {title}'
+    if expected_result:
+        desc = expected_result.get('description', '')
+        expected_arcs = expected_result.get('expected_arcs', '?')
+        matches = (len(arcs) == expected_arcs)
+        status = "✓ PASS" if matches else "✗ FAIL"
+        main_title += f'\nExpected: {desc} | Result: {status}'
+
+    plt.suptitle(main_title, fontsize=16, fontweight='bold')
     plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     return fig
+
+def print_test_header():
+    """Print standardized test header"""
+    print("\n" + "="*80)
+    print("COMPLETE PIPELINE TEST SUITE - Hybrid Detection")
+    print("="*80)
+
+def print_test_result(test_name, expected, actual, details=None):
+    """Print standardized test result"""
+    print("\n" + "-"*80)
+    print(f"TEST: {test_name}")
+    if details:
+        print(f"DESCRIPTION: {details.get('description', 'N/A')}")
+    print("-"*80)
+    print(f"EXPECTED: {expected}")
+    print(f"ACTUAL:   {actual}")
+
+    matches = (expected == actual)
+    status = "✓ PASS" if matches else "✗ FAIL"
+    print(f"STATUS:   {status}")
+
+    if details and 'additional_info' in details:
+        print(f"DETAILS:  {details['additional_info']}")
+    print("-"*80)
+
+    return matches
+
+def print_summary(total, passed, failed):
+    """Print standardized test summary"""
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    print(f"Total Tests:  {total}")
+    print(f"Passed:       {passed} ({(passed/total*100):.1f}%)")
+    print(f"Failed:       {failed} ({(failed/total*100):.1f}%)")
+    print("="*80 + "\n")
 
 def main():
     import argparse
@@ -393,9 +481,15 @@ Examples:
 
     args = parser.parse_args()
 
-    print("\n" + "="*80)
-    print("PDF2SVG Arc Detection - Complete Pipeline Visualization")
-    print("="*80)
+    # Print test header
+    print_test_header()
+    print(f"Algorithm: Hybrid (Global Circle Detection → AASR Fallback)")
+    print(f"Parameters:")
+    print(f"  - Angle tolerance: {args.angle_tolerance}°")
+    print(f"  - Radius tolerance: {args.radius_tolerance*100}%")
+    print(f"  - Min arc points: {args.min_arc_points}")
+    print(f"  - Smoothing enabled: {not args.no_smoothing}")
+    print(f"  - Smoothing window: {args.smoothing_window}")
 
     detector = ArcDetector(
         angle_tolerance=args.angle_tolerance,
@@ -405,11 +499,41 @@ Examples:
         smoothing_window=args.smoothing_window
     )
 
-    test_cases = create_comprehensive_test_case()
+    test_cases, expected_results = create_comprehensive_test_case()
+
+    # Track test results
+    test_results = []
 
     for name, points in test_cases.items():
-        print(f"\nProcessing: {name}")
-        fig = visualize_pipeline_step_by_step(points, name, detector)
+        expected = expected_results.get(name)
+
+        # Run detection
+        arcs = detector.detect_arcs(points)
+        global_result = detector.detect_circle_global(points)
+
+        # Print test result
+        expected_arcs = expected.get('expected_arcs', 0)
+        actual_arcs = len(arcs)
+        used_global = (global_result is not None)
+
+        details = {
+            'description': expected.get('description', 'N/A'),
+            'additional_info': f"Detected {actual_arcs} arc(s) from {len(points)} points. "
+                              f"Detection method: {'Global' if used_global else 'AASR'}"
+        }
+
+        passed = print_test_result(
+            name,
+            f"{expected_arcs} arc(s)",
+            f"{actual_arcs} arc(s)",
+            details
+        )
+
+        test_results.append(passed)
+
+        # Generate visualization
+        print(f"Generating visualization...")
+        fig = visualize_pipeline_step_by_step(points, name, detector, expected)
 
         # Save
         safe_name = name.replace(' ', '_').replace('-', '_')
@@ -417,9 +541,11 @@ Examples:
         plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
 
-    print("\n" + "="*80)
-    print("All visualizations complete!")
-    print("="*80)
+    # Print summary
+    total = len(test_results)
+    passed = sum(test_results)
+    failed = total - passed
+    print_summary(total, passed, failed)
 
     plt.show()
 
