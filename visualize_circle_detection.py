@@ -310,8 +310,16 @@ def print_test_header(suite_name):
     print(f"CIRCLE DETECTION TEST SUITE - {suite_name}")
     print("="*80)
 
-def print_test_result(test_name, expected, actual, details=None):
-    """Print standardized test result"""
+def print_test_result(test_name, expected, actual, details=None, compare_value=None):
+    """Print standardized test result
+
+    Args:
+        test_name: Name of the test
+        expected: Expected result string (for display)
+        actual: Actual result string (for display)
+        details: Additional details dict
+        compare_value: If provided, use this boolean for pass/fail instead of string comparison
+    """
     print("\n" + "-"*80)
     print(f"TEST: {test_name}")
     if details:
@@ -320,7 +328,12 @@ def print_test_result(test_name, expected, actual, details=None):
     print(f"EXPECTED: {expected}")
     print(f"ACTUAL:   {actual}")
 
-    matches = (expected == actual)
+    # Use compare_value if provided, otherwise fall back to string comparison
+    if compare_value is not None:
+        matches = compare_value
+    else:
+        matches = (expected == actual)
+
     status = "✓ PASS" if matches else "✗ FAIL"
     print(f"STATUS:   {status}")
 
@@ -386,23 +399,31 @@ Examples:
     for circle_name, points in circles.items():
         expected = circle_expected.get(circle_name)
 
-        # Run detection
+        # Run BOTH detection methods
         global_result = detector.detect_circle_global(points)
+        aasr_arcs = detector.detect_arcs(points)
 
-        # Print test result
+        # Print comprehensive test result
         should_detect = expected.get('should_detect_global', False)
-        detected = (global_result is not None)
+        global_detected = (global_result is not None)
+        aasr_detected = len(aasr_arcs)
 
         details = {
             'description': expected.get('description', 'N/A'),
-            'additional_info': f"{'Detected circle' if detected else 'No circle detected'} from {len(points)} input points"
+            'additional_info': (
+                f"Global Detection: {'✓ Circle detected' if global_detected else '✗ No circle'} | "
+                f"AASR Detection: {aasr_detected} arc(s) detected | "
+                f"Input: {len(points)} points"
+            )
         }
 
+        # Pass only Global result for comparison, full info for display
         passed = print_test_result(
             circle_name,
-            "Circle detected" if should_detect else "No circle detected",
-            "Circle detected" if detected else "No circle detected",
-            details
+            f"Global: {'Circle' if should_detect else 'No circle'}",
+            f"Global: {'Circle' if global_detected else 'No circle'} | AASR: {aasr_detected} arc(s)",
+            details,
+            compare_value=(should_detect == global_detected)  # Only compare Global result
         )
 
         all_test_results.append(passed)
@@ -435,15 +456,14 @@ Examples:
         visualize_global_vs_aasr(points, detector, ax5, ax6, expected)
 
         # Enhanced title with expected result
-        title = f'Global Circle Detection: {circle_name}'
+        title = f'Circle Detection Test: {circle_name}'
         if expected:
             desc = expected.get('description', '')
             should_detect = expected.get('should_detect_global', None)
-            global_result = detector.detect_circle_global(points)
             if should_detect is not None:
-                matches = (global_result is not None) == should_detect
+                matches = (global_detected == should_detect)
                 status = "✓ PASS" if matches else "✗ FAIL"
-                title += f'\nExpected: {desc} | Result: {status}'
+                title += f'\n{desc} | Global: {status} | AASR: {aasr_detected} arc(s)'
         plt.suptitle(title, fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
@@ -462,23 +482,31 @@ Examples:
     for arc_name, points in arcs.items():
         expected = arc_expected.get(arc_name)
 
-        # Run detection
+        # Run BOTH detection methods
         global_result = detector.detect_circle_global(points)
+        aasr_arcs = detector.detect_arcs(points)
 
-        # Print test result
+        # Print comprehensive test result
         should_detect = expected.get('should_detect_global', False)
-        detected = (global_result is not None)
+        global_detected = (global_result is not None)
+        aasr_detected = len(aasr_arcs)
 
         details = {
             'description': expected.get('description', 'N/A'),
-            'additional_info': f"{'Detected circle (WRONG!)' if detected else 'Correctly rejected'} from {len(points)} input points"
+            'additional_info': (
+                f"Global Detection: {'✗ WRONG - Circle detected!' if global_detected else '✓ Correctly rejected (not a closed loop)'} | "
+                f"AASR Detection: {aasr_detected} arc(s) detected (expected for partial arcs) | "
+                f"Input: {len(points)} points"
+            )
         }
 
+        # Pass only Global result for comparison, full info for display
         passed = print_test_result(
             arc_name,
-            "Circle detected" if should_detect else "No circle detected",
-            "Circle detected" if detected else "No circle detected",
-            details
+            f"Global: {'Circle' if should_detect else 'No circle'}",
+            f"Global: {'Circle' if global_detected else 'No circle'} | AASR: {aasr_detected} arc(s)",
+            details,
+            compare_value=(should_detect == global_detected)  # Only compare Global result
         )
 
         all_test_results.append(passed)
@@ -509,15 +537,14 @@ Examples:
         visualize_global_vs_aasr(points, detector, ax5, ax6, expected)
 
         # Enhanced title with expected result
-        title = f'Global Circle Detection: {arc_name}'
+        title = f'Partial Arc Test: {arc_name}'
         if expected:
             desc = expected.get('description', '')
             should_detect = expected.get('should_detect_global', None)
-            global_result = detector.detect_circle_global(points)
             if should_detect is not None:
-                matches = (global_result is not None) == should_detect
+                matches = (global_detected == should_detect)
                 status = "✓ PASS" if matches else "✗ FAIL"
-                title += f'\nExpected: {desc} | Result: {status}'
+                title += f'\n{desc} | Global: {status} (should reject) | AASR: {aasr_detected} arc(s) (should detect)'
         plt.suptitle(title, fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.97])
 
