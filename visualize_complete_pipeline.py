@@ -49,8 +49,10 @@ def create_comprehensive_test_case():
     test_cases['Noisy Circle'] = noisy_circle
     expected['Noisy Circle'] = {
         'expected_arcs': 1,
-        'description': 'Full circle with noise',
-        'should_use_global': True
+        'description': 'Full 360° CIRCLE with noise',
+        'test_type': 'CIRCLE',
+        'should_use_global': True,
+        'explanation': 'Should be detected as closed loop by Global detection, returned as 1 circle'
     }
 
     # 2. Clean 180-degree arc (semicircle) - SHOULD DETECT 1 arc
@@ -65,7 +67,9 @@ def create_comprehensive_test_case():
     expected['Clean Semicircle'] = {
         'expected_arcs': 1,
         'description': 'Single 180° arc',
-        'should_use_global': False
+        'test_type': 'ARC',
+        'should_use_global': False,
+        'explanation': 'Partial arc, should be detected by AASR (not a closed loop)'
     }
 
     # 3. S-curve (smooth continuous curve with changing curvature direction) - SHOULD DETECT 2 arcs
@@ -84,7 +88,9 @@ def create_comprehensive_test_case():
     expected['S-Curve'] = {
         'expected_arcs': 2,
         'description': 'Two arcs with opposite curvature',
-        'should_use_global': False
+        'test_type': 'COMPOSITE',
+        'should_use_global': False,
+        'explanation': 'S-curve should be segmented into 2 arcs by AASR'
     }
 
     # 4. Straight line - SHOULD DETECT 0 arcs
@@ -96,7 +102,9 @@ def create_comprehensive_test_case():
     expected['Straight Line'] = {
         'expected_arcs': 0,
         'description': 'Straight line - no arcs',
-        'should_use_global': False
+        'test_type': 'LINE',
+        'should_use_global': False,
+        'explanation': 'Straight line should not be detected as arc by either method'
     }
 
     return test_cases, expected
@@ -409,13 +417,16 @@ def visualize_pipeline_step_by_step(points, title, detector, expected_result=Non
     ax12.set_title('Decision Flow')
 
     # Add expected result to title
-    main_title = f'Complete Arc Detection Pipeline: {title}'
+    test_type = expected_result.get('test_type', 'UNKNOWN') if expected_result else 'UNKNOWN'
+    main_title = f'Pipeline Test [{test_type}]: {title}'
     if expected_result:
         desc = expected_result.get('description', '')
         expected_arcs = expected_result.get('expected_arcs', '?')
+        should_use_global = expected_result.get('should_use_global', False)
         matches = (len(arcs) == expected_arcs)
         status = "✓ PASS" if matches else "✗ FAIL"
-        main_title += f'\nExpected: {desc} | Result: {status}'
+        method_info = f"Method: {'Global' if global_circle else 'AASR'} (Expected: {'Global' if should_use_global else 'AASR'})"
+        main_title += f'\n{desc} | {method_info} | Result: {status}'
 
     plt.suptitle(main_title, fontsize=16, fontweight='bold')
     plt.tight_layout(rect=[0, 0, 1, 0.97])
@@ -515,17 +526,28 @@ Examples:
         expected_arcs = expected.get('expected_arcs', 0)
         actual_arcs = len(arcs)
         used_global = (global_result is not None)
+        should_use_global = expected.get('should_use_global', False)
+        test_type = expected.get('test_type', 'UNKNOWN')
 
+        # Build detailed description
         details = {
             'description': expected.get('description', 'N/A'),
-            'additional_info': f"Detected {actual_arcs} arc(s) from {len(points)} points. "
-                              f"Detection method: {'Global' if used_global else 'AASR'}"
+            'additional_info': (
+                f"Test Type: {test_type} | "
+                f"Expected Method: {'Global (circle detection)' if should_use_global else 'AASR (arc segmentation)'} | "
+                f"Actual Method Used: {'Global' if used_global else 'AASR'} | "
+                f"Result: {actual_arcs} arc(s) detected from {len(points)} points"
+            )
         }
+
+        # Add explanation
+        if 'explanation' in expected:
+            details['additional_info'] += f"\nExpected Behavior: {expected['explanation']}"
 
         passed = print_test_result(
             name,
-            f"{expected_arcs} arc(s)",
-            f"{actual_arcs} arc(s)",
+            f"{expected_arcs} arc(s) [{test_type}]",
+            f"{actual_arcs} arc(s) [via {'Global' if used_global else 'AASR'}]",
             details
         )
 
