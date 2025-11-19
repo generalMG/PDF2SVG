@@ -216,8 +216,18 @@ Examples:
     # Convert to Point objects
     points_obj = [Point(p[0], p[1]) for p in noisy_points]
 
+    # Define EXPECTED results based on test parameters
+    # With noise amplitude > 0, we EXPECT zigzag pattern to be detected
+    # With smoothing enabled, we EXPECT radius consistency to improve
+    expected = {
+        'zigzag_detected': args.noise > 0,  # Expect zigzag if there's noise
+        'improved_consistency': not args.no_smoothing,  # Expect improvement if smoothing enabled
+        'description': 'Noisy circle should have zigzag pattern detected'
+    }
+
+    # Get ACTUAL results
     # Detect zigzag
-    is_zigzag = detector._detect_zigzag_pattern(points_obj)
+    actual_zigzag = detector._detect_zigzag_pattern(points_obj)
 
     # Get smoothed versions for each pass
     smoothed_pass1 = detector._smooth_polyline(points_obj)
@@ -232,14 +242,7 @@ Examples:
     # Calculate centers for radius analysis
     center = Point(center_x, center_y)
 
-    # Calculate expected results
-    expected = {
-        'zigzag_detected': is_zigzag,
-        'description': 'Noisy circle should have zigzag pattern detected'
-    }
-
-    # Calculate radius deviation improvement
-    center = Point(center_x, center_y)
+    # Calculate radius deviation improvement (ACTUAL)
     radii_original = [center.distance_to(p) for p in points_obj]
     avg_r_original = sum(radii_original) / len(radii_original)
     max_dev_original = max(abs(r - avg_r_original) for r in radii_original)
@@ -250,7 +253,8 @@ Examples:
     max_dev_final = max(abs(r - avg_r_final) for r in radii_final)
     rel_dev_final = max_dev_final / avg_r_final
 
-    expected['improved_consistency'] = rel_dev_final < rel_dev_original
+    # Store actual results
+    actual_improved_consistency = rel_dev_final < rel_dev_original
     expected['original_deviation'] = rel_dev_original
     expected['final_deviation'] = rel_dev_final
 
@@ -330,9 +334,12 @@ Examples:
     # Build title with pass/fail status
     title = 'Zigzag Smoothing Algorithm - Step by Step Visualization'
 
-    # Add pass/fail summary
-    zigzag_status = "✓ PASS" if expected['zigzag_detected'] else "✗ FAIL"
-    improvement_status = "✓ PASS" if expected['improved_consistency'] else "✗ FAIL"
+    # Add pass/fail summary based on ACTUAL results matching EXPECTED
+    zigzag_matches = (actual_zigzag == expected['zigzag_detected'])
+    improvement_matches = (actual_improved_consistency == expected['improved_consistency'])
+
+    zigzag_status = "✓ PASS" if zigzag_matches else "✗ FAIL"
+    improvement_status = "✓ PASS" if improvement_matches else "✗ FAIL"
 
     title += f'\nZigzag Detection: {zigzag_status} | Radius Consistency Improved: {improvement_status}'
     title += f'\nDeviation: {expected["original_deviation"]*100:.2f}% → {expected["final_deviation"]*100:.2f}%'
@@ -350,12 +357,12 @@ Examples:
     # Test 1: Zigzag detection
     details = {
         'description': expected['description'],
-        'additional_info': f"Zigzag pattern {'detected' if expected['zigzag_detected'] else 'not detected'} in noisy circle"
+        'additional_info': f"Zigzag pattern {'detected' if actual_zigzag else 'not detected'} in noisy circle"
     }
     passed = print_test_result(
         "Zigzag Detection",
         "Zigzag detected" if expected['zigzag_detected'] else "No zigzag detected",
-        "Zigzag detected" if expected['zigzag_detected'] else "No zigzag detected",
+        "Zigzag detected" if actual_zigzag else "No zigzag detected",
         details
     )
     test_results.append(passed)
@@ -363,13 +370,13 @@ Examples:
     # Test 2: Radius consistency improvement
     details = {
         'description': 'Smoothing should improve radius consistency',
-        'additional_info': f"Deviation improved from {expected['original_deviation']*100:.2f}% to {expected['final_deviation']*100:.2f}% "
-                          f"(reduction: {(expected['original_deviation'] - expected['final_deviation'])*100:.2f}%)"
+        'additional_info': f"Deviation {'improved' if actual_improved_consistency else 'did not improve'} from {expected['original_deviation']*100:.2f}% to {expected['final_deviation']*100:.2f}% "
+                          f"(change: {(expected['original_deviation'] - expected['final_deviation'])*100:.2f}%)"
     }
     passed = print_test_result(
         "Radius Consistency Improvement",
         "Improved" if expected['improved_consistency'] else "Not improved",
-        "Improved" if expected['improved_consistency'] else "Not improved",
+        "Improved" if actual_improved_consistency else "Not improved",
         details
     )
     test_results.append(passed)
