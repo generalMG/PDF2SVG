@@ -93,9 +93,11 @@ optional arguments:
   -o, --output OUTPUT   Output SVG file path (default: output/<filename>.svg)
   -p, --page PAGE       Page number to convert, 0-indexed (default: 0)
   --no-arc-detection    Disable arc detection, output polylines only
-  --angle-tolerance DEG Angle tolerance for arc detection in degrees (default: 5.0)
-  --radius-tolerance    Radius tolerance as fraction (default: 0.02 = 2%)
-  --min_arc_points N    Minimum points to consider as arc (default: 8)
+  --angle_tolerance DEG Angle tolerance for arc detection in degrees (default: 2.0)
+  --radius_tolerance    Radius tolerance as fraction (default: 0.02 = 2%)
+  --min_arc_points N    Minimum points to consider as arc (default: 4)
+  --no-smoothing        Disable zigzag smoothing
+  --smoothing_window N  Moving average window for smoothing (default: 5)
 ```
 
 ### Examples
@@ -103,7 +105,7 @@ optional arguments:
 Convert specific page with custom tolerances:
 
 ```bash
-python pdf_to_svg.py drawing.pdf -p 1 --angle-tolerance 10 --radius-tolerance 0.05
+python pdf_to_svg.py drawing.pdf -p 1 --angle_tolerance 4.0 --radius_tolerance 0.05
 ```
 
 Disable arc detection (output raw polylines):
@@ -137,8 +139,8 @@ positional arguments:
 optional arguments:
   -o, --output-dir DIR  Output directory for SVG files (default: output/)
   -j, --jobs N          Number of parallel jobs (default: 4)
-  --angle-tolerance     Arc detection angle tolerance (default: 5.0)
-  --radius-tolerance    Arc detection radius tolerance (default: 0.02)
+  --angle-tolerance     Arc detection angle tolerance (default: 8.0)
+  --radius-tolerance    Arc detection radius tolerance (default: 0.03)
   --min-arc-points      Minimum points for arc (default: 8)
   --no-arc-detection    Disable arc detection
 ```
@@ -178,9 +180,9 @@ The converter uses a **hybrid detection approach** combining fast global analysi
 
 ### Detection Parameters
 
-- **Angle Tolerance**: Maximum angular deviation between consecutive segments (default: 5 degrees)
+- **Angle Tolerance**: Maximum angular deviation between consecutive segments (default: 2 degrees for the CLI)
 - **Radius Tolerance**: Maximum relative radius variation across arc points (default: 2%)
-- **Minimum Arc Points**: Minimum segments to consider as arc candidate (default: 8 points)
+- **Minimum Arc Points**: Minimum segments to consider as arc candidate (default: 4 points)
 
 ### Detection Method Selection
 
@@ -197,12 +199,12 @@ The hybrid approach **automatically** selects the best method:
 
 For **high-precision drawings** (many segments per arc):
 ```bash
---angle-tolerance 5.0 --radius-tolerance 0.02 --min-arc-points 6
+--angle_tolerance 2.0 --radius_tolerance 0.02 --min_arc_points 4
 ```
 
 For **low-resolution drawings** (few segments per arc):
 ```bash
---angle-tolerance 12.0 --radius-tolerance 0.05 --min-arc-points 3
+--angle_tolerance 8.0 --radius_tolerance 0.05 --min_arc_points 3
 ```
 
 **Note**: With hybrid detection, angle tolerance primarily affects AASR fallback. Global circle detection uses only radius tolerance (default 2%).
@@ -240,8 +242,8 @@ This creates `output/input.svg`
 
 2. **SVG to DXF** (VectorImgAnalysis):
 ```bash
-cd /mnt/d/mg_ai_research/workspace/whatnot/VectorImgAnalysis
-python svg_to_dxf.py /mnt/d/mg_ai_research/workspace/whatnot/PDF2SVG/output/input.svg -o final.dxf
+cd <VectorImgAnalysis repo>
+python svg_to_dxf.py /path/to/PDF2SVG/output/input.svg -o final.dxf
 ```
 
 ### Expected Benefits
@@ -321,6 +323,28 @@ Expected results with hybrid detection:
 
 Actual results depend on arc detection parameters and PDF structure.
 
+## Visualization Branch Extras
+
+The `visualization` branch adds a suite of Matplotlib-based tools that showcase each stage of the hybrid arc-detection pipeline. They are useful for debugging, demos, and parameter tuning.
+
+### Included Visualization Scripts
+
+- `visualize_smoothing.py`: Demonstrates zigzag detection and the 3-pass smoothing workflow before arc fitting. Run `python visualize_smoothing.py`.
+- `visualize_arc_detection.py`: Walks through AASR segmentation, arc fitting, and classification for multiple paths. Run `python visualize_arc_detection.py`.
+- `visualize_circle_detection.py`: Explains the global closed-loop detector with centroid, radius, and validation steps. Run `python visualize_circle_detection.py`.
+- `visualize_complete_pipeline.py`: Combines smoothing, global detection, AASR fallback, and classification into a twelve-panel dashboard. Run `python visualize_complete_pipeline.py`.
+
+### Visualization Gallery
+
+| Script | Preview |
+|--------|---------|
+| `visualize_smoothing.py` | ![Smoothing visualization](docs/visualizations/visualize_smoothing.png) |
+| `visualize_arc_detection.py` | ![Arc detection visualization](docs/visualizations/visualize_arc_detection.png) |
+| `visualize_circle_detection.py` | ![Circle detection visualization](docs/visualizations/visualize_circle_detection.png) |
+| `visualize_complete_pipeline.py` | ![Complete pipeline visualization](docs/visualizations/visualize_complete_pipeline.png) |
+
+Each PNG above was generated directly from the scripts using the default parameters (`MPLBACKEND=Agg python <script>.py`). Replace the files by rerunning the scripts after tweaking tolerances to document new behaviors.
+
 ## Performance
 
 ### Conversion Speed
@@ -349,9 +373,9 @@ Batch mode with 8 workers:
 
 **Solutions**:
 - Check if polylines are closed loops (global detection works automatically)
-- Increase `--radius-tolerance` to 0.03-0.05 for noisier data
-- Increase `--angle-tolerance` to 10-15 degrees (affects AASR fallback only)
-- Decrease `--min-arc-points` to 5-6 for small arcs
+- Increase `--radius_tolerance` to 0.03-0.05 for noisier data
+- Increase `--angle_tolerance` to 10-15 degrees (affects AASR fallback only)
+- Decrease `--min_arc_points` to 3 for very short arcs
 
 **Note**: Hybrid detection should automatically catch most complete circles regardless of point count.
 
@@ -360,9 +384,9 @@ Batch mode with 8 workers:
 **Symptoms**: Straight lines detected as arcs
 
 **Solutions**:
-- Decrease `--angle-tolerance` to 5-6 degrees
-- Decrease `--radius-tolerance` to 0.01-0.02
-- Increase `--min-arc-points` to 5-6
+- Decrease `--angle_tolerance` to 5-6 degrees
+- Decrease `--radius_tolerance` to 0.01-0.02
+- Increase `--min_arc_points` to 5-6
 
 ### Conversion Errors
 
@@ -404,14 +428,14 @@ Contributions welcome. Focus areas:
 ## Project Files
 
 ### Main Scripts
-- **pdf_to_svg.py** (16KB): Single file converter with CLI
-- **batch_convert.py** (6KB): Parallel batch processor
-- **arc_detector.py** (15KB): Geometric arc detection engine
-- **analyze_pdf.py** (8KB): PDF structure analysis utility
+- **pdf_to_svg.py**: Single file converter with CLI
+- **batch_convert.py**: Parallel batch processor
+- **arc_detector.py**: Geometric arc detection engine
+- **analyze_pdf.py**: PDF structure analysis utility
 
 ### Documentation
-- **README.md** (11KB): Complete documentation
-- **QUICKSTART.md** (2KB): Quick start guide
+- **README.md**: Complete documentation
+- **QUICKSTART.md**: Quick start guide
 - **requirements.txt**: PyMuPDF dependency
 
 ### Output
@@ -422,7 +446,7 @@ Contributions welcome. Focus areas:
 ## Related Projects
 
 **VectorImgAnalysis**: SVG to DXF converter
-- Location: `/mnt/d/mg_ai_research/workspace/whatnot/VectorImgAnalysis`
+- Location: `/path/to/VectorImgAnalysis`
 - Handles SVG path parsing and DXF entity generation
 - Supports arcs, circles, ellipses, splines
 
