@@ -39,19 +39,15 @@ def create_test_paths():
         arc_270.append((x, y))
     paths['270° Arc'] = arc_270
 
-    # 3. S-curve (two opposite arcs)
+    # 3. S-curve (smooth continuous curve with changing curvature direction)
+    # Use parametric sine wave to create smooth S-shape
     s_curve = []
-    # First arc (0 to 180 degrees, one direction)
-    for i in range(25):
-        angle = (i / 24) * math.pi
-        x = 100 + 30 * math.cos(angle)
-        y = 100 + 30 * math.sin(angle)
-        s_curve.append((x, y))
-    # Second arc (opposite direction)
-    for i in range(25):
-        angle = math.pi + (i / 24) * math.pi
-        x = 100 + 30 * math.cos(angle)
-        y = 70 + 30 * math.sin(angle)
+    amplitude = 30
+    height = 120
+    for i in range(50):
+        t = i / 49  # 0 to 1
+        x = 100 + amplitude * math.sin(t * 2 * math.pi)
+        y = 100 + t * height
         s_curve.append((x, y))
     paths['S-Curve'] = s_curve
 
@@ -193,9 +189,10 @@ def visualize_radius_deviation(points, detector, ax):
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-def visualize_complete_pipeline(path_name, points):
+def visualize_complete_pipeline(path_name, points, detector=None):
     """Create comprehensive visualization for one path"""
-    detector = ArcDetector(angle_tolerance=5.0, radius_tolerance=0.02, min_arc_points=4)
+    if detector is None:
+        detector = ArcDetector(angle_tolerance=5.0, radius_tolerance=0.02, min_arc_points=4)
 
     fig = plt.figure(figsize=(16, 12))
 
@@ -344,16 +341,47 @@ def visualize_complete_pipeline(path_name, points):
     return fig
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Visualize AASR arc detection algorithm',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python visualize_arc_detection.py
+  python visualize_arc_detection.py --angle-tolerance 10.0
+  python visualize_arc_detection.py --radius-tolerance 0.05 --min-arc-points 6
+        '''
+    )
+
+    parser.add_argument('--angle-tolerance', type=float, default=5.0, help='Angle tolerance in degrees (default: 5.0)')
+    parser.add_argument('--radius-tolerance', type=float, default=0.02, help='Radius tolerance fraction (default: 0.02)')
+    parser.add_argument('--min-arc-points', type=int, default=4, help='Minimum arc points (default: 4)')
+    parser.add_argument('--smoothing-window', type=int, default=5, help='Smoothing window size (default: 5)')
+    parser.add_argument('--no-smoothing', action='store_true', help='Disable smoothing')
+    parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
+
+    args = parser.parse_args()
+
+    # Create detector with specified parameters
+    detector = ArcDetector(
+        angle_tolerance=args.angle_tolerance,
+        radius_tolerance=args.radius_tolerance,
+        min_arc_points=args.min_arc_points,
+        enable_smoothing=not args.no_smoothing,
+        smoothing_window=args.smoothing_window
+    )
+
     paths = create_test_paths()
 
     for path_name, points in paths.items():
         print(f"\nProcessing: {path_name}")
-        fig = visualize_complete_pipeline(path_name, points)
+        fig = visualize_complete_pipeline(path_name, points, detector)
 
         # Save
         safe_name = path_name.replace('°', 'deg').replace(' ', '_').replace('-', '_')
         filename = f'output/arc_detection_{safe_name}.png'
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
 
     plt.show()

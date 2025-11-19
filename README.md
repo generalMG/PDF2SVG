@@ -95,7 +95,7 @@ optional arguments:
   --no-arc-detection    Disable arc detection, output polylines only
   --angle-tolerance DEG Angle tolerance for arc detection in degrees (default: 5.0)
   --radius-tolerance    Radius tolerance as fraction (default: 0.02 = 2%)
-  --min-arc-points N    Minimum points to consider as arc (default: 8)
+  --min_arc_points N    Minimum points to consider as arc (default: 8)
 ```
 
 ### Examples

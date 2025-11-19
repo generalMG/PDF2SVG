@@ -51,19 +51,16 @@ def create_comprehensive_test_case():
         y = 150 + 35 * math.sin(angle)
         clean_arc.append((x, y))
 
-    # 3. S-curve (two connected arcs with opposite curvature)
+    # 3. S-curve (smooth continuous curve with changing curvature direction)
+    # Use parametric sine wave to create smooth S-shape
     s_curve = []
-    # First half
-    for i in range(20):
-        angle = (i / 19) * math.pi
-        x = 100 + 25 * math.cos(angle)
-        y = 280 + 25 * math.sin(angle)
-        s_curve.append((x, y))
-    # Second half
-    for i in range(20):
-        angle = math.pi + (i / 19) * math.pi
-        x = 100 + 25 * math.cos(angle)
-        y = 255 + 25 * math.sin(angle)
+    amplitude = 25
+    height = 100
+    base_y = 280
+    for i in range(40):
+        t = i / 39  # 0 to 1
+        x = 100 + amplitude * math.sin(t * 2 * math.pi)
+        y = base_y + t * height
         s_curve.append((x, y))
 
     # 4. Straight line
@@ -374,16 +371,38 @@ def visualize_pipeline_step_by_step(points, title, detector):
     return fig
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Visualize complete arc detection pipeline',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python visualize_complete_pipeline.py
+  python visualize_complete_pipeline.py --angle-tolerance 10.0
+  python visualize_complete_pipeline.py --radius-tolerance 0.05 --no-smoothing
+        '''
+    )
+
+    parser.add_argument('--angle-tolerance', type=float, default=5.0, help='Angle tolerance in degrees (default: 5.0)')
+    parser.add_argument('--radius-tolerance', type=float, default=0.02, help='Radius tolerance fraction (default: 0.02)')
+    parser.add_argument('--min-arc-points', type=int, default=4, help='Minimum arc points (default: 4)')
+    parser.add_argument('--smoothing-window', type=int, default=5, help='Smoothing window size (default: 5)')
+    parser.add_argument('--no-smoothing', action='store_true', help='Disable smoothing')
+    parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
+
+    args = parser.parse_args()
+
     print("\n" + "="*80)
     print("PDF2SVG Arc Detection - Complete Pipeline Visualization")
     print("="*80)
 
     detector = ArcDetector(
-        angle_tolerance=5.0,
-        radius_tolerance=0.02,
-        min_arc_points=4,
-        enable_smoothing=True,
-        smoothing_window=5
+        angle_tolerance=args.angle_tolerance,
+        radius_tolerance=args.radius_tolerance,
+        min_arc_points=args.min_arc_points,
+        enable_smoothing=not args.no_smoothing,
+        smoothing_window=args.smoothing_window
     )
 
     test_cases = create_comprehensive_test_case()
@@ -395,7 +414,7 @@ def main():
         # Save
         safe_name = name.replace(' ', '_').replace('-', '_')
         filename = f'output/pipeline_{safe_name}.png'
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
 
     print("\n" + "="*80)

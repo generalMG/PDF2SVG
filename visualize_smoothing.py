@@ -113,13 +113,48 @@ def visualize_radius_consistency(points, center, ax, title):
     ax.grid(True, alpha=0.3)
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Visualize zigzag detection and smoothing algorithm',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python visualize_smoothing.py
+  python visualize_smoothing.py --noise 3.0 --points 100
+  python visualize_smoothing.py --smoothing-window 7 --no-smoothing
+        '''
+    )
+
+    parser.add_argument('--center-x', type=float, default=100, help='Circle center X (default: 100)')
+    parser.add_argument('--center-y', type=float, default=100, help='Circle center Y (default: 100)')
+    parser.add_argument('--radius', type=float, default=50, help='Circle radius (default: 50)')
+    parser.add_argument('--points', type=int, default=50, help='Number of points (default: 50)')
+    parser.add_argument('--noise', type=float, default=2.5, help='Noise amplitude (default: 2.5)')
+    parser.add_argument('--angle-tolerance', type=float, default=5.0, help='Angle tolerance in degrees (default: 5.0)')
+    parser.add_argument('--radius-tolerance', type=float, default=0.02, help='Radius tolerance fraction (default: 0.02)')
+    parser.add_argument('--min-arc-points', type=int, default=4, help='Minimum arc points (default: 4)')
+    parser.add_argument('--smoothing-window', type=int, default=5, help='Smoothing window size (default: 5)')
+    parser.add_argument('--no-smoothing', action='store_true', help='Disable smoothing')
+    parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
+
+    args = parser.parse_args()
+
     # Create noisy circle
-    center_x, center_y = 100, 100
-    radius = 50
-    noisy_points = create_noisy_circle(center_x, center_y, radius, num_points=50, noise_amplitude=2.5)
+    center_x, center_y = args.center_x, args.center_y
+    radius = args.radius
+    noisy_points = create_noisy_circle(center_x, center_y, radius,
+                                       num_points=args.points,
+                                       noise_amplitude=args.noise)
 
     # Create detector
-    detector = ArcDetector(enable_smoothing=True, smoothing_window=5)
+    detector = ArcDetector(
+        angle_tolerance=args.angle_tolerance,
+        radius_tolerance=args.radius_tolerance,
+        min_arc_points=args.min_arc_points,
+        enable_smoothing=not args.no_smoothing,
+        smoothing_window=args.smoothing_window
+    )
 
     # Convert to Point objects
     points_obj = [Point(p[0], p[1]) for p in noisy_points]
@@ -218,7 +253,7 @@ def main():
     plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     # Save
-    plt.savefig('output/smoothing_visualization.png', dpi=150, bbox_inches='tight')
+    plt.savefig('output/smoothing_visualization.png', dpi=args.dpi, bbox_inches='tight')
     print("✓ Saved: output/smoothing_visualization.png")
 
     plt.show()

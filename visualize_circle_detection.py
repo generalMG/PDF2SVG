@@ -273,7 +273,35 @@ def visualize_global_vs_aasr(points, detector, ax1, ax2):
     ax2.set_title('AASR Detection\n(Segmentation-based)')
 
 def main():
-    detector = ArcDetector(angle_tolerance=5.0, radius_tolerance=0.02, min_arc_points=4)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Visualize global circle detection algorithm',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python visualize_circle_detection.py
+  python visualize_circle_detection.py --angle-tolerance 10.0
+  python visualize_circle_detection.py --radius-tolerance 0.05
+        '''
+    )
+
+    parser.add_argument('--angle-tolerance', type=float, default=5.0, help='Angle tolerance in degrees (default: 5.0)')
+    parser.add_argument('--radius-tolerance', type=float, default=0.02, help='Radius tolerance fraction (default: 0.02)')
+    parser.add_argument('--min-arc-points', type=int, default=4, help='Minimum arc points (default: 4)')
+    parser.add_argument('--smoothing-window', type=int, default=5, help='Smoothing window size (default: 5)')
+    parser.add_argument('--no-smoothing', action='store_true', help='Disable smoothing')
+    parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
+
+    args = parser.parse_args()
+
+    detector = ArcDetector(
+        angle_tolerance=args.angle_tolerance,
+        radius_tolerance=args.radius_tolerance,
+        min_arc_points=args.min_arc_points,
+        enable_smoothing=not args.no_smoothing,
+        smoothing_window=args.smoothing_window
+    )
 
     # Test 1: Circles with varying resolution
     print("\n" + "="*60)
@@ -316,7 +344,7 @@ def main():
         # Save
         safe_name = circle_name.replace(' ', '_')
         filename = f'output/circle_detection_{safe_name}.png'
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
 
     # Test 2: Partial arcs (should NOT be detected as circles)
@@ -358,7 +386,7 @@ def main():
         # Save
         safe_name = arc_name.replace('°', 'deg').replace(' ', '_')
         filename = f'output/circle_detection_{safe_name}.png'
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
 
     plt.show()
