@@ -45,7 +45,8 @@ class Arc:
 class ArcDetector:
     def __init__(self, angle_tolerance: float = 5.0, radius_tolerance: float = 0.02,
                  min_arc_points: int = 4, collinearity_threshold: float = 0.001,
-                 enable_smoothing: bool = True, smoothing_window: int = 5):
+                 enable_smoothing: bool = True, smoothing_window: int = 5,
+                 min_arc_span: float = 15.0, min_segment_curvature: float = 10.0):
         """
         Args:
             angle_tolerance: Max deviation in degrees from expected arc angles
@@ -54,6 +55,10 @@ class ArcDetector:
             collinearity_threshold: Threshold for detecting straight lines
             enable_smoothing: Enable zigzag smoothing preprocessing
             smoothing_window: Window size for moving average smoothing (must be odd)
+            min_arc_span: Minimum geometric arc span in degrees (default: 15.0)
+            min_segment_curvature: Minimum cumulative curvature for segment validation in degrees (default: 10.0)
+                                   Lower values (5.0) detect smaller arcs but may increase false positives.
+                                   Higher values (15.0) are more conservative for noisy data.
         """
         self.angle_tolerance = angle_tolerance
         self.radius_tolerance = radius_tolerance
@@ -61,6 +66,8 @@ class ArcDetector:
         self.collinearity_threshold = collinearity_threshold
         self.enable_smoothing = enable_smoothing
         self.smoothing_window = smoothing_window if smoothing_window % 2 == 1 else smoothing_window + 1
+        self.min_arc_span = min_arc_span
+        self.min_segment_curvature = min_segment_curvature
 
     def detect_arcs(self, points: List[Tuple[float, float]]) -> List[Arc]:
         """
@@ -264,16 +271,17 @@ class ArcDetector:
         if effective_window % 2 == 0:
             effective_window += 1
 
-        # Taubin smoothing parameters
-        lambda_smooth = 0.5    # Shrink coefficient (positive)
-        mu_smooth = -0.53      # Expand coefficient (negative, slightly larger magnitude)
-        num_passes = 5         # More passes with gentler per-pass changes
+        # Taubin smoothing parameters (fine-tuned for minimal distortion)
+        lambda_smooth = 0.4    # Shrink coefficient (positive) - reduced for gentler smoothing
+        mu_smooth = -0.42      # Expand coefficient (negative, slightly larger magnitude)
+        num_passes = 6         # Even number ensures last pass is expand (counters shrinkage)
 
         smoothed = points
         half_window = effective_window // 2
 
         for pass_num in range(num_passes):
             # Alternate between shrink (lambda) and expand (mu)
+            # pass 0: shrink, pass 1: expand, pass 2: shrink, pass 3: expand, pass 4: shrink, pass 5: expand
             coefficient = lambda_smooth if pass_num % 2 == 0 else mu_smooth
             new_smoothed = []
 
@@ -371,14 +379,19 @@ class ArcDetector:
                     current_segment.append(points[i])
                 else:
                     # Curvature direction changed - end current segment
-                    if len(current_segment) >= self.min_arc_points and segment_cumulative_angle > math.radians(10):
+                    # Include transition point in current segment before ending
+                    current_segment.append(points[i])
+                    # Use configurable threshold (default 10°, can be lowered to 5° for detecting smaller arcs)
+                    if len(current_segment) >= self.min_arc_points and segment_cumulative_angle > math.radians(self.min_segment_curvature):
                         segments.append(current_segment)
+                    # Start new segment with transition point
                     current_segment = [points[i]]
                     current_curvature_sign = curvature_sign
                     segment_cumulative_angle = theta  # Reset with current angle
             else:
                 # Straight or nearly straight section
-                if segment_cumulative_angle > math.radians(10):
+                # Use configurable threshold to determine if previous segment had enough curvature
+                if segment_cumulative_angle > math.radians(self.min_segment_curvature):
                     # Previous segment had significant curvature, save it
                     if len(current_segment) >= self.min_arc_points:
                         segments.append(current_segment)
@@ -392,7 +405,8 @@ class ArcDetector:
             current_segment.append(points[-1])
 
         # Add final segment if it's long enough and has enough curvature
-        if len(current_segment) >= self.min_arc_points and segment_cumulative_angle > math.radians(10):
+        # Use configurable threshold
+        if len(current_segment) >= self.min_arc_points and segment_cumulative_angle > math.radians(self.min_segment_curvature):
             segments.append(current_segment)
 
         return segments
@@ -503,9 +517,9 @@ class ArcDetector:
         end_angle = self._calculate_angle(center, segment[-1])
         arc_span = abs(self._calculate_angle_span(start_angle, end_angle))
 
-        # Require minimum 15° arc span (actual geometric span, not incremental changes)
+        # Require minimum arc span (configurable, default 15°)
         # This correctly identifies smooth arcs that have small per-segment angles
-        if arc_span < 15.0:
+        if arc_span < self.min_arc_span:
             return None
 
         # Filter out tiny arcs (increased threshold to reduce false positives)
@@ -537,7 +551,7 @@ class ArcDetector:
 
                         # Check arc span for trimmed segment
                         arc_span_trimmed = abs(self._calculate_angle_span(start_angle, end_angle))
-                        if arc_span_trimmed < 15.0:
+                        if arc_span_trimmed < self.min_arc_span:
                             return None
 
                         return Arc(
@@ -554,6 +568,26 @@ class ArcDetector:
 
         # Good fit! Arc parameters already calculated above (start_angle, end_angle)
 
+        # CRITICAL: Validate arc direction - ensure arc contains the actual points
+        # For a 270° arc, we should detect the 270° segment with points, not the empty 90°
+        arc_span = self._calculate_angle_span(start_angle, end_angle)
+
+        # Check if points are actually on this arc or its complement
+        # Calculate angles for all points and check distribution
+        point_angles = [self._calculate_angle(center, p) for p in segment]
+
+        # Determine if points follow the arc from start_angle to end_angle
+        # or if they're on the complementary arc
+        points_on_arc = self._validate_arc_direction(
+            point_angles, start_angle, end_angle, arc_span
+        )
+
+        # If points are on the complementary arc, swap start/end
+        if not points_on_arc:
+            # Points are on the opposite side - use complementary arc
+            start_angle, end_angle = end_angle, start_angle
+            arc_span = 360 - arc_span
+
         # Check if it's a full circle
         is_full_circle = False
         if len(segment) >= 8:
@@ -562,8 +596,7 @@ class ArcDetector:
                                     for i in range(len(segment)-1)) / (len(segment)-1)
 
             if first_to_last_dist < 1.2 * avg_segment_length:
-                angle_span = self._calculate_angle_span(start_angle, end_angle)
-                if angle_span >= 358:
+                if arc_span >= 358:
                     is_full_circle = True
 
         return Arc(
@@ -678,6 +711,62 @@ class ArcDetector:
             points=arc_points,
             is_full_circle=is_full_circle
         )
+
+    def _validate_arc_direction(self, point_angles: List[float],
+                                 start_angle: float, end_angle: float,
+                                 arc_span: float) -> bool:
+        """
+        Validate that points are actually on the arc from start_angle to end_angle,
+        not on the complementary arc.
+
+        This fixes the 270° arc bug where the algorithm detected the empty 90° segment
+        instead of the 270° segment containing the points.
+
+        Args:
+            point_angles: Angles of all points relative to center
+            start_angle: Start angle of proposed arc
+            end_angle: End angle of proposed arc
+            arc_span: Span of proposed arc (degrees)
+
+        Returns:
+            True if points are on the arc, False if on complementary arc
+        """
+        if len(point_angles) < 2:
+            return True
+
+        # Count how many points fall within the arc span
+        points_in_arc = 0
+        points_outside_arc = 0
+
+        for angle in point_angles:
+            # Normalize angle to be in range for comparison
+            # Check if angle is between start and end (going counterclockwise)
+            if self._angle_in_range(angle, start_angle, end_angle):
+                points_in_arc += 1
+            else:
+                points_outside_arc += 1
+
+        # Points should be on the arc, not outside it
+        # If more points are outside, we detected the complementary arc
+        return points_in_arc > points_outside_arc
+
+    def _angle_in_range(self, angle: float, start: float, end: float) -> bool:
+        """
+        Check if angle is in the range from start to end (counterclockwise).
+
+        Handles wraparound at 360°/0°.
+        """
+        # Normalize all angles to [0, 360)
+        angle = angle % 360
+        start = start % 360
+        end = end % 360
+
+        if start <= end:
+            # Simple case: no wraparound
+            return start <= angle <= end
+        else:
+            # Wraparound case: e.g., start=350°, end=10°
+            return angle >= start or angle <= end
 
     def _are_collinear(self, p1: Point, p2: Point, p3: Point) -> bool:
         """Check if three points are collinear using cross product"""
