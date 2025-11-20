@@ -397,9 +397,70 @@ class ArcDetector:
 
         return segments
 
+    def _fit_circle_least_squares(self, points: List[Point]) -> Optional[Tuple[Point, float]]:
+        """
+        Fit circle to points using Kåsa algebraic least squares method
+
+        More robust than 3-point geometric fit as it uses all points to
+        find the optimal center and radius, averaging out noise.
+
+        Args:
+            points: List of Point objects
+
+        Returns:
+            Tuple of (center, radius) or None if fit fails
+        """
+        if len(points) < 3:
+            return None
+
+        # Extract coordinates
+        n = len(points)
+        x = [p.x for p in points]
+        y = [p.y for p in points]
+
+        # Calculate sums for Kåsa method
+        sx = sum(x)
+        sy = sum(y)
+        sxx = sum(xi**2 for xi in x)
+        syy = sum(yi**2 for yi in y)
+        sxy = sum(xi*yi for xi, yi in zip(x, y))
+        sxxx = sum(xi**3 for xi in x)
+        syyy = sum(yi**3 for yi in y)
+        sxyy = sum(xi*yi**2 for xi, yi in zip(x, y))
+        sxxy = sum(xi**2*yi for xi, yi in zip(x, y))
+
+        # Build linear system: A * [uc, vc] = b
+        # where (uc, vc) are the circle center coordinates
+        A = 2 * (sxx - sx*sx/n)
+        B = 2 * (sxy - sx*sy/n)
+        C = 2 * (sxy - sx*sy/n)
+        D = 2 * (syy - sy*sy/n)
+
+        E = sxxx + sxyy - (sx/n) * (sxx + syy)
+        F = sxxy + syyy - (sy/n) * (sxx + syy)
+
+        # Solve 2x2 system
+        det = A * D - B * C
+        if abs(det) < 1e-10:
+            return None  # Singular system
+
+        uc = (E * D - B * F) / det
+        vc = (A * F - E * C) / det
+
+        center = Point(uc, vc)
+
+        # Calculate radius
+        radii = [center.distance_to(p) for p in points]
+        radius = sum(radii) / len(radii)
+
+        return (center, radius)
+
     def _fit_arc_to_segment(self, segment: List[Point]) -> Optional[Arc]:
         """
         Fit a circle/arc to an entire curved segment using global least-squares
+
+        Uses Kåsa least squares method for robust fitting, with fallback to
+        3-point geometric fit and edge trimming if initial fit fails.
 
         This is the core AASR reconstruction step
         """
@@ -410,25 +471,31 @@ class ArcDetector:
         if len(segment) >= 3 and self._are_collinear(segment[0], segment[1], segment[2]):
             return None
 
-        # Try to fit circle to entire segment
-        # Use interior points to avoid edge transition artifacts
-        # Endpoints are often at segmentation cuts (inflection points) with noise
-        n = len(segment)
-        if n >= 5:
-            # Use points at 20%, 50%, 80% of segment
-            idx1 = max(0, n // 5)
-            idx2 = n // 2
-            idx3 = min(n - 1, (4 * n) // 5)
+        # Try least squares fit first (uses all points, more robust)
+        ls_result = self._fit_circle_least_squares(segment)
+
+        if ls_result:
+            center, avg_radius = ls_result
         else:
-            # Fallback for very short segments
-            idx1 = 0
-            idx2 = n // 2
-            idx3 = n - 1
+            # Fallback to 3-point geometric fit
+            # Use interior points to avoid edge transition artifacts
+            n = len(segment)
+            if n >= 5:
+                idx1 = max(0, n // 5)
+                idx2 = n // 2
+                idx3 = min(n - 1, (4 * n) // 5)
+            else:
+                idx1 = 0
+                idx2 = n // 2
+                idx3 = n - 1
 
-        center = self._find_circle_center(segment[idx1], segment[idx2], segment[idx3])
+            center = self._find_circle_center(segment[idx1], segment[idx2], segment[idx3])
 
-        if center is None:
-            return None
+            if center is None:
+                return None
+
+            radii = [center.distance_to(p) for p in segment]
+            avg_radius = sum(radii) / len(radii)
 
         # Additional check: verify the segment has enough curvature
         # Calculate actual arc span instead of summing consecutive angle changes
@@ -441,20 +508,48 @@ class ArcDetector:
         if arc_span < 15.0:
             return None
 
-        # Calculate radius from center to all points
-        radii = [center.distance_to(p) for p in segment]
-        avg_radius = sum(radii) / len(radii)
-
         # Filter out tiny arcs (increased threshold to reduce false positives)
         if avg_radius < 5.0:
             return None
 
         # Check radius consistency across all points (global fit quality)
+        radii = [center.distance_to(p) for p in segment]
         max_deviation = max(abs(r - avg_radius) for r in radii)
         relative_deviation = max_deviation / avg_radius
 
         if relative_deviation > self.radius_tolerance:
-            # Poor fit - try to find best contiguous sub-segment
+            # Poor fit - try trimming edge points and re-fitting
+            if len(segment) > self.min_arc_points + 2:
+                # Try without first and last point
+                trimmed = segment[1:-1]
+                trimmed_result = self._fit_circle_least_squares(trimmed)
+
+                if trimmed_result:
+                    center_trimmed, radius_trimmed = trimmed_result
+                    radii_trimmed = [center_trimmed.distance_to(p) for p in trimmed]
+                    max_dev_trimmed = max(abs(r - radius_trimmed) for r in radii_trimmed)
+                    rel_dev_trimmed = max_dev_trimmed / radius_trimmed
+
+                    if rel_dev_trimmed <= self.radius_tolerance:
+                        # Trimmed fit succeeded
+                        start_angle = self._calculate_angle(center_trimmed, trimmed[0])
+                        end_angle = self._calculate_angle(center_trimmed, trimmed[-1])
+
+                        # Check arc span for trimmed segment
+                        arc_span_trimmed = abs(self._calculate_angle_span(start_angle, end_angle))
+                        if arc_span_trimmed < 15.0:
+                            return None
+
+                        return Arc(
+                            center=center_trimmed,
+                            radius=radius_trimmed,
+                            start_angle=start_angle,
+                            end_angle=end_angle,
+                            points=trimmed,
+                            is_full_circle=False
+                        )
+
+            # Still failed - use legacy fallback
             return self._try_fit_arc(segment)
 
         # Good fit! Arc parameters already calculated above (start_angle, end_angle)
