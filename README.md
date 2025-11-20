@@ -53,7 +53,7 @@ PDF2SVG/
 
 ### Requirements
 
-- Python 3.7+
+- Python 3.11+
 - PyMuPDF (fitz)
 
 ### Setup
