@@ -35,6 +35,13 @@ PDF2SVG analyzes line segment sequences and reconstructs them as proper geometri
 - Compatible with downstream SVG-to-DXF converters
 - Minimal dependencies (only PyMuPDF required)
 
+## Recent Updates (last 5 commits)
+
+- Kåsa least-squares fitting is now the primary arc fit with edge-trimming rescue and arc-direction validation; minimum arc span (15° default) and segment curvature threshold (10° default) are configurable to catch smooth arcs without promoting straight lines.
+- Taubin smoothing retuned to λ=0.4 / μ=-0.42 across six alternating passes, finishing on an expand pass to eliminate radius drift while keeping noise removal gentle.
+- Visualization harness adds `visualization_validation.py` for coverage/span/direction metrics plus `--no-show` flags on all Matplotlib scripts for headless runs.
+- Visualization PNGs were regenerated with `--angle-tolerance 0.5` to showcase small-angle behavior; rerun the scripts with that tolerance to refresh.
+
 ## Project Structure
 
 ```
@@ -159,9 +166,9 @@ The converter uses a **hybrid detection approach** combining fast global analysi
 
 2. **Preprocessing - Taubin Smoothing** (if zigzag detected):
    - Detects alternating angle patterns (zigzag threshold: 2.0°)
-   - Applies volume-preserving Taubin smoothing (5 alternating passes)
+   - Applies volume-preserving Taubin smoothing (6 alternating passes)
    - **Advantage**: Removes noise without shrinking radius (eliminates 6%+ distortion from traditional methods)
-   - Uses lambda=0.5 (shrink) and mu=-0.53 (expand) coefficients
+   - Uses lambda=0.4 (shrink) and mu=-0.42 (expand) coefficients (last pass expands to zero out drift)
 
 3. **Global Circle Detection** (Fast Preprocessing):
    - Checks if polyline forms a closed loop (first point ≈ last point)
@@ -171,18 +178,19 @@ The converter uses a **hybrid detection approach** combining fast global analysi
 
 4. **AASR Fallback** (Angle-Based Segmentation & Reconstruction):
    - Applied when global detection fails (partial arcs, complex paths)
-   - **Cumulative angle tracking**: Distinguishes smooth curves from straight lines
+   - **Cumulative angle tracking**: Distinguishes smooth curves from straight lines with configurable minimum segment curvature (default: 10°)
    - Cross product threshold (0.05): Detects curvature presence
    - Segments polyline by curvature direction changes
    - **Interior point sampling** (20%, 50%, 80%): Avoids noisy edge points at segmentation cuts
-   - Requires minimum 15° arc span (geometric span, not incremental changes)
+   - Requires minimum arc span (default 15°, configurable) measured as geometric span, not incremental changes
 
 5. **Kåsa Least Squares Fitting**:
    - **Algebraic circle fitting** using all segment points
    - Builds and solves 2×2 linear system for optimal center/radius
    - **More robust** than 3-point geometric fit (averages out noise)
    - **Fast**: Non-iterative O(n) algorithm
-   - **Fallback**: 3-point geometric fit with interior sampling if least squares fails
+   - **Edge-resilient**: Falls back to trimmed least-squares then 3-point geometric fit if needed
+   - **Direction validation**: Ensures arcs follow the side containing the points (fixes complementary-arc errors on 270° spans)
 
 6. **Edge Trimming Fallback**:
    - If radius consistency check fails (>2% deviation)
@@ -217,9 +225,9 @@ Recent improvements address critical issues identified through comprehensive tes
 **Problem**: Gaussian moving average smoothing caused 6%+ radius shrinkage on circles, degrading geometric accuracy.
 
 **Solution**: Taubin smoothing with alternating shrink/expand passes:
-- λ = 0.5 (shrink coefficient, positive)
-- μ = -0.53 (expand coefficient, negative)
-- 5 alternating passes (vs. 3 Gaussian passes)
+- λ = 0.4 (shrink coefficient, positive)
+- μ = -0.42 (expand coefficient, negative)
+- 6 alternating passes ending on expand (vs. 3 Gaussian passes)
 - **Result**: 0% radius distortion, preserves original geometry
 
 #### **3. Robust Circle Fitting (Enhanced)**
@@ -275,6 +283,14 @@ Recent improvements address critical issues identified through comprehensive tes
 - **Minimum Arc Points**: Minimum segments to consider as arc (default: 4 points)
   - Filters out tiny arc candidates
   - Balance between detail preservation and noise rejection
+
+- **Minimum Arc Span**: Minimum geometric span for an arc (default: 15°)
+  - Prevents classification of near-straight segments as arcs
+  - Lower values catch very tight arcs; higher values are conservative for noisy data
+
+- **Segment Curvature Threshold**: Minimum cumulative curvature before keeping a segment (default: 10°)
+  - Avoids creating arc segments out of minor wiggles
+  - Lower values can improve recall on gentle curves
 
 - **Zigzag Threshold**: Alternating angle magnitude for smoothing activation (default: 2.0°)
   - Prevents false activation on smooth high-resolution circles
@@ -412,16 +428,16 @@ The project includes comprehensive visualization tests demonstrating algorithm c
 
 ```bash
 # Test Taubin smoothing (volume preservation)
-MPLBACKEND=Agg python3 visualize_smoothing.py
+MPLBACKEND=Agg python3 visualize_smoothing.py --angle-tolerance 0.5 --no-show
 
 # Test AASR arc detection (90°, 270°, S-curves, line-arc-line)
-MPLBACKEND=Agg python3 visualize_arc_detection.py
+MPLBACKEND=Agg python3 visualize_arc_detection.py --angle-tolerance 0.5 --no-show
 
 # Test global circle detection (12-200 points, partial arc rejection)
-MPLBACKEND=Agg python3 visualize_circle_detection.py
+MPLBACKEND=Agg python3 visualize_circle_detection.py --angle-tolerance 0.5 --no-show
 
 # Test complete pipeline (hybrid detection, all steps)
-MPLBACKEND=Agg python3 visualize_complete_pipeline.py
+MPLBACKEND=Agg python3 visualize_complete_pipeline.py --angle-tolerance 0.5 --no-show
 ```
 
 Each visualization generates detailed multi-panel figures showing:
@@ -432,6 +448,7 @@ Each visualization generates detailed multi-panel figures showing:
 - Pass/fail validation
 
 **Expected Results**: All tests should pass (100% pass rate) with current improvements.
+When running with a stricter `--angle-tolerance 0.5` (used for the gallery above), coverage assertions become harsher on small-span S-curves and line-arc-line patterns; expect those to flag gaps unless tolerances are relaxed back toward the defaults.
 
 ### Test Arc Detection Algorithm
 
@@ -482,6 +499,8 @@ The `visualization` branch (now merged into main) includes a suite of Matplotlib
 - `visualize_complete_pipeline.py`: Combines smoothing, global detection, AASR fallback, Kåsa fitting, and classification into a twelve-panel dashboard. Run `python visualize_complete_pipeline.py`.
 
 ### Visualization Gallery
+
+Gallery below was regenerated with `--angle-tolerance 0.5` to emphasize small-angle behavior.
 
 | Script | Preview |
 |--------|---------|
@@ -619,6 +638,7 @@ Contributions welcome. Focus areas:
 - **visualize_arc_detection.py**: AASR pipeline walkthrough
 - **visualize_circle_detection.py**: Global detection explanation
 - **visualize_complete_pipeline.py**: Complete algorithm dashboard
+- **visualization_validation.py**: Shared metrics (coverage/span/direction) for headless visualization checks
 
 ### Documentation
 - **README.md**: Complete documentation
@@ -640,6 +660,7 @@ Contributions welcome. Focus areas:
 - **Edge trimming fallback**: Multi-layer fitting robustness
 - **Zigzag threshold tuning**: Selective smoothing activation (2.0°)
 - **Hybrid global + AASR detection**: Fast preprocessing with sophisticated fallback
+- **Arc direction validation**: Prevents selecting complementary arcs on large spans
 - **Test suite**: Comprehensive visualization tests
 
 ## Related Projects
