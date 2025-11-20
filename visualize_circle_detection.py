@@ -373,6 +373,7 @@ Examples:
     parser.add_argument('--smoothing-window', type=int, default=5, help='Smoothing window size (default: 5)')
     parser.add_argument('--no-smoothing', action='store_true', help='Disable smoothing')
     parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
+    parser.add_argument('--no-show', action='store_true', help='Do not display plots (just save to files)')
 
     args = parser.parse_args()
 
@@ -560,7 +561,8 @@ Examples:
     failed = total - passed
     print_summary(total, passed, failed)
 
-    plt.show()
+    if not args.no_show:
+        plt.show()
 
 if __name__ == "__main__":
     main()

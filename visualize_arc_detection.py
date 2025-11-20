@@ -8,12 +8,22 @@ Shows the complete AASR pipeline:
 3. Circle fitting for each segment
 4. Validation checks (radius consistency, collinearity)
 5. Final detected arcs with parameters
+
+Enhanced with comprehensive validation metrics:
+- Point coverage analysis
+- Arc direction validation
+- Arc span verification
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 import math
 from arc_detector import ArcDetector, Point, Arc
+from visualization_validation import (
+    analyze_detection_quality,
+    format_test_result,
+    print_summary
+)
 
 def create_test_paths():
     """Create various test paths for visualization"""
@@ -30,7 +40,12 @@ def create_test_paths():
         y = center_y + radius * math.sin(angle)
         arc_90.append((x, y))
     paths['90° Arc'] = arc_90
-    expected['90° Arc'] = {'should_detect': True, 'expected_arcs': 1, 'description': 'Single 90° arc'}
+    expected['90° Arc'] = {
+        'should_detect': True,
+        'expected_arcs': 1,
+        'expected_span': 90.0,
+        'description': 'Single 90° arc'
+    }
 
     # 2. Large arc (270 degrees) - SHOULD DETECT 1 arc
     arc_270 = []
@@ -40,7 +55,12 @@ def create_test_paths():
         y = center_y + radius * math.sin(angle)
         arc_270.append((x, y))
     paths['270° Arc'] = arc_270
-    expected['270° Arc'] = {'should_detect': True, 'expected_arcs': 1, 'description': 'Single 270° arc'}
+    expected['270° Arc'] = {
+        'should_detect': True,
+        'expected_arcs': 1,
+        'expected_span': 270.0,
+        'description': 'Single 270° arc'
+    }
 
     # 3. S-curve (smooth continuous curve with changing curvature direction) - SHOULD DETECT 2 arcs
     # Use parametric sine wave to create smooth S-shape
@@ -403,15 +423,6 @@ def print_test_result(test_name, expected, actual, details=None):
 
     return matches
 
-def print_summary(total, passed, failed):
-    """Print standardized test summary"""
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    print(f"Total Tests:  {total}")
-    print(f"Passed:       {passed} ({(passed/total*100):.1f}%)")
-    print(f"Failed:       {failed} ({(failed/total*100):.1f}%)")
-    print("="*80 + "\n")
 
 def main():
     import argparse
@@ -433,6 +444,7 @@ Examples:
     parser.add_argument('--smoothing-window', type=int, default=5, help='Smoothing window size (default: 5)')
     parser.add_argument('--no-smoothing', action='store_true', help='Disable smoothing')
     parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
+    parser.add_argument('--no-show', action='store_true', help='Do not display plots (just save to files)')
 
     args = parser.parse_args()
 
@@ -459,29 +471,32 @@ Examples:
     # Track test results
     test_results = []
 
+    # Store comprehensive results for summary
+    comprehensive_results = []
+
     for path_name, points in paths.items():
         expected = expected_results.get(path_name)
 
         # Run detection
         arcs = detector.detect_arcs(points)
 
-        # Print test result
+        # Enhanced validation with comprehensive metrics
         expected_arcs = expected.get('expected_arcs', 0)
-        actual_arcs = len(arcs)
+        expected_span = expected.get('expected_span', None)
 
-        details = {
-            'description': expected.get('description', 'N/A'),
-            'additional_info': f"Detected {actual_arcs} arc(s) from {len(points)} input points"
-        }
-
-        passed = print_test_result(
-            path_name,
-            f"{expected_arcs} arc(s)",
-            f"{actual_arcs} arc(s)",
-            details
+        analysis = analyze_detection_quality(
+            points,
+            arcs,
+            expected_arcs,
+            expected_span
         )
 
-        test_results.append(passed)
+        # Print enhanced test result
+        print(format_test_result(path_name, analysis, expected_arcs, arcs))
+
+        # Store for summary
+        test_results.append(analysis['overall_pass'])
+        comprehensive_results.append((path_name, analysis))
 
         # Generate visualization
         print(f"Generating visualization...")
@@ -493,13 +508,11 @@ Examples:
         plt.savefig(filename, dpi=args.dpi, bbox_inches='tight')
         print(f"✓ Saved: {filename}")
 
-    # Print summary
-    total = len(test_results)
-    passed = sum(test_results)
-    failed = total - passed
-    print_summary(total, passed, failed)
+    # Print enhanced summary
+    print_summary(comprehensive_results)
 
-    plt.show()
+    if not args.no_show:
+        plt.show()
 
 if __name__ == "__main__":
     main()
