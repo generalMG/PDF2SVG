@@ -217,8 +217,9 @@ class ArcDetector:
         avg_abs_angle = sum(abs(a) for a in angle_changes) / len(angle_changes)
 
         # Zigzag detected if: high alternation + meaningful angles
-        # Lowered threshold to 0.5° to catch subtle zigzags in PDF rendering
-        is_zigzag = alternation_ratio > 0.5 and avg_abs_angle > 0.5
+        # Increased threshold to 2.0° to only catch actual zigzag noise
+        # High-resolution circles have ~1.5° changes, shouldn't trigger smoothing
+        is_zigzag = alternation_ratio > 0.5 and avg_abs_angle > 2.0
 
         return is_zigzag
 
@@ -244,10 +245,10 @@ class ArcDetector:
 
     def _smooth_polyline(self, points: List[Point]) -> List[Point]:
         """
-        Smooth polyline using adaptive moving average to remove zigzag noise
-        while preserving overall curve shape
+        Smooth polyline using Taubin smoothing (volume-preserving)
 
-        Applies iterative smoothing passes for better results
+        Alternates shrink and expand steps to remove noise without changing shape.
+        This prevents the radius shrinkage problem of traditional moving averages.
 
         Args:
             points: List of Point objects
@@ -263,40 +264,40 @@ class ArcDetector:
         if effective_window % 2 == 0:
             effective_window += 1
 
-        # Apply multiple smoothing passes for stronger effect
-        # Increased to 3 passes for better handling of subtle zigzags
-        num_passes = 3
+        # Taubin smoothing parameters
+        lambda_smooth = 0.5    # Shrink coefficient (positive)
+        mu_smooth = -0.53      # Expand coefficient (negative, slightly larger magnitude)
+        num_passes = 5         # More passes with gentler per-pass changes
+
         smoothed = points
+        half_window = effective_window // 2
 
         for pass_num in range(num_passes):
+            # Alternate between shrink (lambda) and expand (mu)
+            coefficient = lambda_smooth if pass_num % 2 == 0 else mu_smooth
             new_smoothed = []
-            half_window = effective_window // 2
 
             for i in range(len(smoothed)):
                 if i == 0 or i == len(smoothed) - 1:
                     # Keep endpoints unchanged
                     new_smoothed.append(smoothed[i])
                 else:
-                    # Apply weighted moving average
+                    # Calculate window bounds
                     start_idx = max(0, i - half_window)
                     end_idx = min(len(smoothed), i + half_window + 1)
-
                     window_points = smoothed[start_idx:end_idx]
-                    center_idx = i - start_idx
 
-                    # Gaussian weights
-                    weights = []
-                    for j in range(len(window_points)):
-                        dist = abs(j - center_idx)
-                        sigma = half_window / 2.0
-                        weight = math.exp(-(dist ** 2) / (2 * sigma ** 2))
-                        weights.append(weight)
+                    # Simple averaging (Laplacian operator)
+                    avg_x = sum(p.x for p in window_points) / len(window_points)
+                    avg_y = sum(p.y for p in window_points) / len(window_points)
 
-                    total_weight = sum(weights)
-                    avg_x = sum(p.x * w for p, w in zip(window_points, weights)) / total_weight
-                    avg_y = sum(p.y * w for p, w in zip(window_points, weights)) / total_weight
+                    # Taubin step: move toward average by coefficient
+                    # Positive coefficient = shrink (move toward neighbors)
+                    # Negative coefficient = expand (move away from neighbors)
+                    new_x = smoothed[i].x + coefficient * (avg_x - smoothed[i].x)
+                    new_y = smoothed[i].y + coefficient * (avg_y - smoothed[i].y)
 
-                    new_smoothed.append(Point(avg_x, avg_y))
+                    new_smoothed.append(Point(new_x, new_y))
 
             smoothed = new_smoothed
 
@@ -306,6 +307,10 @@ class ArcDetector:
                               angle_tolerance_rad: float = None) -> List[List[Point]]:
         """
         Segment polyline into regions of consistent curvature using AASR algorithm
+
+        Uses cumulative angle tracking to distinguish smooth curves from straight sections.
+        Small instantaneous angles can indicate either straight lines OR smooth curves,
+        so we track cumulative curvature to make the distinction.
 
         Returns list of curved segments (filters out straight sections)
         """
@@ -319,6 +324,7 @@ class ArcDetector:
         segments = []
         current_segment = [points[0]]
         current_curvature_sign = None
+        segment_cumulative_angle = 0.0  # Track total curvature in current segment
 
         for i in range(1, len(points) - 1):
             # Calculate vectors for consecutive segments
@@ -345,19 +351,17 @@ class ArcDetector:
             cross = v1_norm.x * v2_norm.y - v1_norm.y * v2_norm.x
             curvature_sign = 1 if cross > 0 else -1 if cross < 0 else 0
 
-            # Check if this is a straight section
-            # theta is the angle between consecutive vectors:
-            # - theta ≈ 0 means vectors point in SAME direction (straight line)
-            # - theta ≈ π means vectors point in OPPOSITE directions (sharp reversal)
-            # We want to detect when theta is close to 0 (straight continuation)
-            if theta < angle_tolerance_rad:
-                # Straight section - end current curved segment
-                if len(current_segment) >= self.min_arc_points:
-                    segments.append(current_segment)
-                current_segment = [points[i]]
-                current_curvature_sign = None
-            else:
-                # Curved section
+            # Determine if point is part of a curve based on:
+            # 1. Cross product magnitude (curvature presence)
+            # 2. Cumulative angle (total curvature, not instantaneous)
+            # 3. Consistent curvature direction
+
+            has_curvature = abs(cross) > 0.05  # Not straight (cross product threshold)
+
+            if has_curvature:
+                # Point has curvature - accumulate angle
+                segment_cumulative_angle += theta
+
                 if current_curvature_sign is None:
                     # Start new curved segment
                     current_curvature_sign = curvature_sign
@@ -367,17 +371,28 @@ class ArcDetector:
                     current_segment.append(points[i])
                 else:
                     # Curvature direction changed - end current segment
-                    if len(current_segment) >= self.min_arc_points:
+                    if len(current_segment) >= self.min_arc_points and segment_cumulative_angle > math.radians(10):
                         segments.append(current_segment)
                     current_segment = [points[i]]
                     current_curvature_sign = curvature_sign
+                    segment_cumulative_angle = theta  # Reset with current angle
+            else:
+                # Straight or nearly straight section
+                if segment_cumulative_angle > math.radians(10):
+                    # Previous segment had significant curvature, save it
+                    if len(current_segment) >= self.min_arc_points:
+                        segments.append(current_segment)
+                # Reset for potential new segment
+                current_segment = [points[i]]
+                current_curvature_sign = None
+                segment_cumulative_angle = 0.0
 
         # Add last point to current segment
         if len(points) > 0:
             current_segment.append(points[-1])
 
-        # Add final segment if it's long enough
-        if len(current_segment) >= self.min_arc_points:
+        # Add final segment if it's long enough and has enough curvature
+        if len(current_segment) >= self.min_arc_points and segment_cumulative_angle > math.radians(10):
             segments.append(current_segment)
 
         return segments
@@ -395,37 +410,35 @@ class ArcDetector:
         if len(segment) >= 3 and self._are_collinear(segment[0], segment[1], segment[2]):
             return None
 
-        # Additional check: verify the segment has enough curvature
-        # Calculate total angular change
-        total_angle_change = 0
-        for i in range(1, len(segment) - 1):
-            v1 = Point(segment[i].x - segment[i-1].x, segment[i].y - segment[i-1].y)
-            v2 = Point(segment[i+1].x - segment[i].x, segment[i+1].y - segment[i].y)
-
-            len_v1 = math.sqrt(v1.x**2 + v1.y**2)
-            len_v2 = math.sqrt(v2.x**2 + v2.y**2)
-
-            if len_v1 < 1e-6 or len_v2 < 1e-6:
-                continue
-
-            v1_norm = Point(v1.x / len_v1, v1.y / len_v1)
-            v2_norm = Point(v2.x / len_v2, v2.y / len_v2)
-
-            dot = v1_norm.x * v2_norm.x + v1_norm.y * v2_norm.y
-            dot = max(-1.0, min(1.0, dot))
-            angle = math.degrees(math.acos(dot))
-            total_angle_change += angle
-
-        # Require minimum total curvature (at least 10° total change for an arc)
-        if total_angle_change < 10.0:
-            return None
-
         # Try to fit circle to entire segment
-        # Use first, middle, and last points for initial circle estimation
-        mid_idx = len(segment) // 2
-        center = self._find_circle_center(segment[0], segment[mid_idx], segment[-1])
+        # Use interior points to avoid edge transition artifacts
+        # Endpoints are often at segmentation cuts (inflection points) with noise
+        n = len(segment)
+        if n >= 5:
+            # Use points at 20%, 50%, 80% of segment
+            idx1 = max(0, n // 5)
+            idx2 = n // 2
+            idx3 = min(n - 1, (4 * n) // 5)
+        else:
+            # Fallback for very short segments
+            idx1 = 0
+            idx2 = n // 2
+            idx3 = n - 1
+
+        center = self._find_circle_center(segment[idx1], segment[idx2], segment[idx3])
 
         if center is None:
+            return None
+
+        # Additional check: verify the segment has enough curvature
+        # Calculate actual arc span instead of summing consecutive angle changes
+        start_angle = self._calculate_angle(center, segment[0])
+        end_angle = self._calculate_angle(center, segment[-1])
+        arc_span = abs(self._calculate_angle_span(start_angle, end_angle))
+
+        # Require minimum 15° arc span (actual geometric span, not incremental changes)
+        # This correctly identifies smooth arcs that have small per-segment angles
+        if arc_span < 15.0:
             return None
 
         # Calculate radius from center to all points
@@ -444,9 +457,7 @@ class ArcDetector:
             # Poor fit - try to find best contiguous sub-segment
             return self._try_fit_arc(segment)
 
-        # Good fit! Calculate arc parameters
-        start_angle = self._calculate_angle(center, segment[0])
-        end_angle = self._calculate_angle(center, segment[-1])
+        # Good fit! Arc parameters already calculated above (start_angle, end_angle)
 
         # Check if it's a full circle
         is_full_circle = False
