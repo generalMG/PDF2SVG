@@ -12,6 +12,7 @@ Shows step-by-step how the smoothing algorithm works:
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+import os
 from arc_detector import ArcDetector, Point
 
 def create_noisy_circle(center_x, center_y, radius, num_points=50, noise_amplitude=2.0):
@@ -30,6 +31,21 @@ def create_noisy_circle(center_x, center_y, radius, num_points=50, noise_amplitu
         points.append((x, y))
 
     return points
+
+def create_zigzag_line(start_x=0.0, end_x=240.0, num_points=80,
+                       noise_amplitude=6.0, baseline_y=0.0, slope=0.0):
+    """Create a straight line with pronounced alternating up/down noise"""
+    xs = np.linspace(start_x, end_x, num_points)
+    base_line = baseline_y + slope * (xs - start_x)
+
+    # Alternating offsets exaggerate the zigzag so it is easy to see
+    offsets = np.array([noise_amplitude if i % 2 == 0 else -noise_amplitude
+                        for i in range(num_points)])
+    ys = base_line + offsets
+
+    noisy_points = list(zip(xs, ys))
+    baseline_points = list(zip(xs, base_line))
+    return noisy_points, baseline_points
 
 def visualize_angle_changes(points, ax, is_first=False):
     """Visualize angle changes between consecutive segments"""
@@ -199,8 +215,17 @@ Examples:
     parser.add_argument('--full_circle_dist_threshold_multiplier', type=float, default=1.2, help='Multiplier for full circle distance threshold')
     parser.add_argument('--full_circle_angle_span', type=float, default=358.0, help='Minimum angle span for full circle')
     parser.add_argument('--least_squares_epsilon', type=float, default=1e-10, help='Epsilon for least squares fitting')
+    parser.add_argument('--line-length', type=float, default=240.0, help='Length of the straight line example (default: 240)')
+    parser.add_argument('--line-points', type=int, default=80, help='Number of points for straight line example (default: 80)')
+    parser.add_argument('--line-noise', type=float, default=6.0, help='Noise amplitude for straight line zigzag (default: 6.0)')
+    parser.add_argument('--line-slope', type=float, default=0.0, help='Optional slope for the straight line example (default: 0)')
+    parser.add_argument('--line-zoom-window', type=int, default=14, help='Number of points to show in zoomed inset for straight line (default: 14)')
 
     args = parser.parse_args()
+
+    total_passes = max(1, args.smoothing_passes)
+
+    os.makedirs('output', exist_ok=True)
 
     # Print test header
     print_test_header()
@@ -211,6 +236,7 @@ Examples:
     print(f"  - Points: {args.points}")
     print(f"  - Noise amplitude: {args.noise}")
     print(f"  - Smoothing window: {args.smoothing_window}")
+    print(f"  - Smoothing passes: {total_passes}")
     print(f"  - Smoothing enabled: {not args.no_smoothing}")
 
     # Create noisy circle
@@ -235,7 +261,7 @@ Examples:
         zigzag_min_angle=args.zigzag_min_angle,
         smoothing_lambda=args.smoothing_lambda,
         smoothing_mu=args.smoothing_mu,
-        smoothing_passes=args.smoothing_passes,
+        smoothing_passes=total_passes,
         curvature_cross_threshold=args.curvature_cross_threshold,
         min_radius=args.min_radius,
         full_circle_dist_threshold_multiplier=args.full_circle_dist_threshold_multiplier,
@@ -259,15 +285,52 @@ Examples:
     # Detect zigzag
     actual_zigzag = detector._detect_zigzag_pattern(points_obj)
 
-    # Get smoothed versions for each pass
-    smoothed_pass1 = detector._smooth_polyline(points_obj)
+    # Helper to get smoothed versions at different fractions of the total passes
+    def smooth_polyline_with_passes(points_seq, pass_count):
+        smoother = ArcDetector(
+            enable_smoothing=True,
+            smoothing_window=args.smoothing_window,
+            smoothing_lambda=args.smoothing_lambda,
+            smoothing_mu=args.smoothing_mu,
+            smoothing_passes=pass_count
+        )
+        return smoother._smooth_polyline(points_seq)
 
-    # For multiple passes, we need to modify the detector temporarily
-    detector_pass2 = ArcDetector(enable_smoothing=True, smoothing_window=5)
-    smoothed_pass2 = detector_pass2._smooth_polyline(smoothed_pass1)
+    snapshot_specs = [
+        (0.50, max(1, math.ceil(total_passes * 0.50))),
+        (0.75, max(1, math.ceil(total_passes * 0.75))),
+        (1.00, total_passes),
+    ]
 
-    detector_pass3 = ArcDetector(enable_smoothing=True, smoothing_window=5)
-    smoothed_pass3 = detector_pass3._smooth_polyline(smoothed_pass2)
+    smoothed_snapshots = []
+    for pct, pass_count in snapshot_specs:
+        pass_count = min(pass_count, total_passes)
+        smoothed_points = smooth_polyline_with_passes(points_obj, pass_count)
+        smoothed_snapshots.append({
+            'pct': pct,
+            'passes': pass_count,
+            'points': smoothed_points
+        })
+
+    # Create a pronounced zigzag straight line to make the smoothing effect obvious
+    zigzag_line, baseline_line = create_zigzag_line(
+        start_x=0.0,
+        end_x=args.line_length,
+        num_points=args.line_points,
+        noise_amplitude=args.line_noise,
+        baseline_y=0.0,
+        slope=args.line_slope
+    )
+    zigzag_line_obj = [Point(p[0], p[1]) for p in zigzag_line]
+    line_smoothed_snapshots = []
+    for pct, pass_count in snapshot_specs:
+        pass_count = min(pass_count, total_passes)
+        smoothed_line = smooth_polyline_with_passes(zigzag_line_obj, pass_count)
+        line_smoothed_snapshots.append({
+            'pct': pct,
+            'passes': pass_count,
+            'points': smoothed_line
+        })
 
     # Calculate centers for radius analysis
     center = Point(center_x, center_y)
@@ -278,7 +341,9 @@ Examples:
     max_dev_original = max(abs(r - avg_r_original) for r in radii_original)
     rel_dev_original = max_dev_original / avg_r_original
 
-    radii_final = [center.distance_to(p) for p in smoothed_pass3]
+    final_smoothed = smoothed_snapshots[-1]['points']
+
+    radii_final = [center.distance_to(p) for p in final_smoothed]
     avg_r_final = sum(radii_final) / len(radii_final)
     max_dev_final = max(abs(r - avg_r_final) for r in radii_final)
     rel_dev_final = max_dev_final / avg_r_final
@@ -302,64 +367,40 @@ Examples:
     ax1.legend()
     ax1.set_title('Original Noisy Polyline')
 
-    ax2 = plt.subplot(3, 4, 2)
-    x_smooth1 = [p.x for p in smoothed_pass1]
-    y_smooth1 = [p.y for p in smoothed_pass1]
-    ax2.plot(x_vals, y_vals, 'r.-', alpha=0.3, markersize=3, linewidth=0.5, label='Original')
-    ax2.plot(x_smooth1, y_smooth1, 'bo-', markersize=4, linewidth=1, label='After pass 1')
-    ax2.plot(center_x, center_y, 'gx', markersize=10, markeredgewidth=2)
-    ax2.set_aspect('equal')
-    ax2.grid(True, alpha=0.3)
-    ax2.legend()
-    ax2.set_title('After Smoothing Pass 1')
-
-    ax3 = plt.subplot(3, 4, 3)
-    x_smooth2 = [p.x for p in smoothed_pass2]
-    y_smooth2 = [p.y for p in smoothed_pass2]
-    ax3.plot(x_vals, y_vals, 'r.-', alpha=0.2, markersize=3, linewidth=0.5, label='Original')
-    ax3.plot(x_smooth2, y_smooth2, 'go-', markersize=4, linewidth=1, label='After pass 2')
-    ax3.plot(center_x, center_y, 'gx', markersize=10, markeredgewidth=2)
-    ax3.set_aspect('equal')
-    ax3.grid(True, alpha=0.3)
-    ax3.legend()
-    ax3.set_title('After Smoothing Pass 2')
-
-    ax4 = plt.subplot(3, 4, 4)
-    x_smooth3 = [p.x for p in smoothed_pass3]
-    y_smooth3 = [p.y for p in smoothed_pass3]
-    ax4.plot(x_vals, y_vals, 'r.-', alpha=0.2, markersize=3, linewidth=0.5, label='Original')
-    ax4.plot(x_smooth3, y_smooth3, 'mo-', markersize=4, linewidth=1, label='After pass 3 (Final)')
-    ax4.plot(center_x, center_y, 'gx', markersize=10, markeredgewidth=2)
-    ax4.set_aspect('equal')
-    ax4.grid(True, alpha=0.3)
-    ax4.legend()
-    ax4.set_title('Final Smoothed Result')
+    colors = ['bo-', 'go-', 'mo-']
+    for idx, snapshot in enumerate(smoothed_snapshots):
+        ax_snapshot = plt.subplot(3, 4, idx + 2)
+        xs = [p.x for p in snapshot['points']]
+        ys = [p.y for p in snapshot['points']]
+        ax_snapshot.plot(x_vals, y_vals, 'r.-', alpha=0.25, markersize=3, linewidth=0.5, label='Original')
+        ax_snapshot.plot(xs, ys, colors[idx], markersize=4, linewidth=1,
+                         label=f'After {snapshot["passes"]} passes')
+        ax_snapshot.plot(center_x, center_y, 'gx', markersize=10, markeredgewidth=2)
+        ax_snapshot.set_aspect('equal')
+        ax_snapshot.grid(True, alpha=0.3)
+        ax_snapshot.legend()
+        pct_label = int(snapshot["pct"] * 100)
+        ax_snapshot.set_title(f'After {pct_label}% of passes ({snapshot["passes"]})')
 
     # Row 2: Angle changes
     ax5 = plt.subplot(3, 4, 5)
     visualize_angle_changes(noisy_points, ax5, is_first=True)
 
-    ax6 = plt.subplot(3, 4, 6)
-    visualize_angle_changes([(p.x, p.y) for p in smoothed_pass1], ax6)
-
-    ax7 = plt.subplot(3, 4, 7)
-    visualize_angle_changes([(p.x, p.y) for p in smoothed_pass2], ax7)
-
-    ax8 = plt.subplot(3, 4, 8)
-    visualize_angle_changes([(p.x, p.y) for p in smoothed_pass3], ax8)
+    for idx, snapshot in enumerate(smoothed_snapshots):
+        ax_angle = plt.subplot(3, 4, idx + 6)
+        visualize_angle_changes([(p.x, p.y) for p in snapshot['points']], ax_angle)
+        pct_label = int(snapshot["pct"] * 100)
+        ax_angle.set_title(f'Angles after {pct_label}% ({snapshot["passes"]} passes)')
 
     # Row 3: Radius consistency
     ax9 = plt.subplot(3, 4, 9)
     visualize_radius_consistency(noisy_points, center, ax9, 'Original')
 
-    ax10 = plt.subplot(3, 4, 10)
-    visualize_radius_consistency([(p.x, p.y) for p in smoothed_pass1], center, ax10, 'Pass 1')
-
-    ax11 = plt.subplot(3, 4, 11)
-    visualize_radius_consistency([(p.x, p.y) for p in smoothed_pass2], center, ax11, 'Pass 2')
-
-    ax12 = plt.subplot(3, 4, 12)
-    visualize_radius_consistency([(p.x, p.y) for p in smoothed_pass3], center, ax12, 'Pass 3 (Final)')
+    for idx, snapshot in enumerate(smoothed_snapshots):
+        ax_radius = plt.subplot(3, 4, idx + 10)
+        pct_label = int(snapshot["pct"] * 100)
+        title = f'{pct_label}% ({snapshot["passes"]} passes)'
+        visualize_radius_consistency([(p.x, p.y) for p in snapshot['points']], center, ax_radius, title)
 
     # Build title with pass/fail status
     title = 'Zigzag Smoothing Algorithm - Step by Step Visualization'
@@ -380,6 +421,108 @@ Examples:
     # Save
     plt.savefig('output/smoothing_visualization.png', dpi=args.dpi, bbox_inches='tight')
     print(f"✓ Saved: output/smoothing_visualization.png")
+
+    # Straight-line focused visualization with exaggerated zigzag noise
+    fig_line = plt.figure(figsize=(18, 10))
+
+    line_x = [p[0] for p in zigzag_line]
+    line_y = [p[1] for p in zigzag_line]
+    base_line_y = [p[1] for p in baseline_line]
+    line_snap_coords = []
+    for snap in line_smoothed_snapshots:
+        xs = [p.x for p in snap['points']]
+        ys = [p.y for p in snap['points']]
+        line_snap_coords.append({'xs': xs, 'ys': ys, 'snap': snap})
+    final_line_points = line_smoothed_snapshots[-1]['points']
+
+    # Panel 1: Highlight the zigzag pattern itself
+    ax_line1 = plt.subplot(2, 2, 1)
+    band_top = [b + args.line_noise for b in base_line_y]
+    band_bottom = [b - args.line_noise for b in base_line_y]
+    alternating_colors = ['#c44e52' if i % 2 == 0 else '#4c72b0' for i in range(len(line_x))]
+    ax_line1.fill_between(line_x, band_bottom, band_top, color='#f2f2f2', alpha=0.9,
+                          label=f'Zigzag band ±{args.line_noise}')
+    ax_line1.plot(line_x, base_line_y, linestyle='--', color='#6c6c6c', linewidth=1.4, label='Ideal straight line')
+    ax_line1.plot(line_x, line_y, color='#c44e52', linewidth=1.0, alpha=0.5, label='Noisy zigzag polyline')
+    ax_line1.scatter(line_x, line_y, c=alternating_colors, s=26, edgecolors='black', linewidth=0.3,
+                     label='Alternating vertices')
+    ax_line1.set_title('Straight Line with Exaggerated Zigzag', fontsize=12)
+    ax_line1.set_xlabel('X position')
+    ax_line1.set_ylabel('Y position')
+    ax_line1.grid(True, alpha=0.3)
+    ax_line1.legend(loc='upper right', fontsize=8)
+
+    # Panel 2: Full-line smoothing progression
+    ax_line2 = plt.subplot(2, 2, 2)
+    ax_line2.plot(line_x, base_line_y, linestyle='--', color='#6c6c6c', linewidth=1.2, label='Ideal straight line')
+    ax_line2.plot(line_x, line_y, 'o-', color='#c44e52', markersize=3, linewidth=1, alpha=0.4, label='Original zigzag')
+    colors_line = ['#4c72b0', '#55a868', '#8172b2']
+    for idx, coord in enumerate(line_snap_coords):
+        snap = coord['snap']
+        pct_label = int(snap["pct"] * 100)
+        label = f'After {pct_label}% ({snap["passes"]} passes)'
+        color = colors_line[idx % len(colors_line)]
+        ax_line2.plot(coord['xs'], coord['ys'], 'o-', color=color, markersize=3, linewidth=1 + 0.1 * idx, label=label)
+    ax_line2.set_title('Smoothing Passes Overlaid (Straight Line)', fontsize=12)
+    ax_line2.set_xlabel('X position')
+    ax_line2.set_ylabel('Y position')
+    ax_line2.grid(True, alpha=0.3)
+    ax_line2.legend(loc='upper right', fontsize=8)
+
+    # Panel 3: Zoomed-in view with movement arrows
+    ax_line3 = plt.subplot(2, 2, 3)
+    window_half = max(3, args.line_zoom_window // 2)
+    zoom_center = len(line_x) // 2
+    zoom_start = max(0, zoom_center - window_half)
+    zoom_end = min(len(line_x), zoom_center + window_half)
+
+    ax_line3.plot(line_x[zoom_start:zoom_end], base_line_y[zoom_start:zoom_end],
+                  linestyle='--', color='#6c6c6c', linewidth=1.0, label='Ideal straight line')
+    final_line_x = [p.x for p in final_line_points]
+    final_line_y = [p.y for p in final_line_points]
+
+    ax_line3.plot(line_x[zoom_start:zoom_end], line_y[zoom_start:zoom_end],
+                  'o-', color='#c44e52', markersize=4, linewidth=1, alpha=0.5, label='Original zigzag')
+    ax_line3.plot(final_line_x[zoom_start:zoom_end], final_line_y[zoom_start:zoom_end],
+                  'o-', color='#55a868', markersize=4, linewidth=1.2, label='Final smoothed')
+
+    # Show per-point motion from original to final in the zoom window
+    zoom_dx = [final_line_points[i].x - zigzag_line_obj[i].x for i in range(zoom_start, zoom_end)]
+    zoom_dy = [final_line_points[i].y - zigzag_line_obj[i].y for i in range(zoom_start, zoom_end)]
+    ax_line3.quiver(line_x[zoom_start:zoom_end], line_y[zoom_start:zoom_end],
+                    zoom_dx, zoom_dy, angles='xy', scale_units='xy', scale=1,
+                    width=0.004, color='#ff7f0e', alpha=0.9, label='Movement to final')
+
+    ax_line3.set_title(f'Zoomed Segment (points {zoom_start}-{zoom_end})', fontsize=12)
+    ax_line3.set_xlabel('X position')
+    ax_line3.set_ylabel('Y position')
+    ax_line3.grid(True, alpha=0.3)
+    ax_line3.legend(loc='upper right', fontsize=8)
+
+    # Panel 4: Zigzag pattern as a 1D signal along the line
+    ax_line4 = plt.subplot(2, 2, 4)
+    indices = list(range(len(line_x)))
+    baseline_minus = [b - args.line_noise for b in base_line_y]
+    baseline_plus = [b + args.line_noise for b in base_line_y]
+    ax_line4.fill_between(indices, baseline_minus, baseline_plus, color='#f2f2f2', alpha=0.9,
+                          label='Zigzag band')
+    ax_line4.plot(indices, line_y, 'o-', color='#c44e52', markersize=3, linewidth=1, alpha=0.5, label='Original zigzag')
+    for idx, coord in enumerate(line_snap_coords):
+        snap = coord['snap']
+        pct_label = int(snap["pct"] * 100)
+        color = colors_line[idx % len(colors_line)]
+        label = f'{pct_label}% ({snap["passes"]} passes)'
+        ax_line4.plot(indices, coord['ys'], 'o-', color=color, markersize=3, linewidth=1 + 0.1 * idx, label=label)
+    ax_line4.set_title('Point-by-Point View (Y vs point index)', fontsize=12)
+    ax_line4.set_xlabel('Point index along line')
+    ax_line4.set_ylabel('Y offset')
+    ax_line4.grid(True, alpha=0.3)
+    ax_line4.legend(loc='upper right', fontsize=8)
+
+    plt.suptitle('Straight Line Zigzag Smoothing — How Each Pass Reduces the Noise', fontsize=16, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    plt.savefig('output/smoothing_line_visualization.png', dpi=args.dpi, bbox_inches='tight')
+    print(f"✓ Saved: output/smoothing_line_visualization.png")
 
     # Print test results
     test_results = []

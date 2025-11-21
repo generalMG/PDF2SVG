@@ -319,6 +319,18 @@ class ArcDetector:
         smoothed = points
         half_window = effective_window // 2
 
+        def mirror_index(idx: int, n: int) -> int:
+            """
+            Reflect index at boundaries to keep window size consistent and avoid edge drift.
+
+            Example for n=5: indices ...-2,-1,0,1,2,3,4,5,6 -> 2,1,0,1,2,3,4,3,2
+            """
+            if idx < 0:
+                return -idx
+            if idx >= n:
+                return (2 * n - 2) - idx
+            return idx
+
         for pass_num in range(num_passes):
             # Alternate between shrink (lambda) and expand (mu)
             # pass 0: shrink, pass 1: expand, pass 2: shrink, pass 3: expand, pass 4: shrink, pass 5: expand
@@ -330,10 +342,12 @@ class ArcDetector:
                     # Keep endpoints unchanged
                     new_smoothed.append(smoothed[i])
                 else:
-                    # Calculate window bounds
-                    start_idx = max(0, i - half_window)
-                    end_idx = min(len(smoothed), i + half_window + 1)
-                    window_points = smoothed[start_idx:end_idx]
+                    # Use reflected indices to keep balanced window near edges
+                    window_indices = [
+                        mirror_index(j, len(smoothed))
+                        for j in range(i - half_window, i + half_window + 1)
+                    ]
+                    window_points = [smoothed[j] for j in window_indices]
 
                     # Simple averaging (Laplacian operator)
                     avg_x = sum(p.x for p in window_points) / len(window_points)
