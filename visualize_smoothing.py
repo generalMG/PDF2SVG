@@ -206,7 +206,7 @@ Examples:
     parser.add_argument('--merge_radius_diff_threshold', type=float, default=0.1, help='Threshold for merging radii')
     parser.add_argument('--zigzag_len_epsilon', type=float, default=1e-6, help='Epsilon for zigzag length')
     parser.add_argument('--zigzag_alternation_ratio', type=float, default=0.5, help='Ratio for zigzag alternation')
-    parser.add_argument('--zigzag_min_angle', type=float, default=2.0, help='Minimum angle for zigzag detection')
+    parser.add_argument('--zigzag_min_angle', type=float, default=0.1, help='Minimum angle for zigzag detection')
     parser.add_argument('--smoothing_lambda', type=float, default=0.4, help='Lambda for Taubin smoothing')
     parser.add_argument('--smoothing_mu', type=float, default=-0.42, help='Mu for Taubin smoothing')
     parser.add_argument('--smoothing_passes', type=int, default=6, help='Number of passes for Taubin smoothing')

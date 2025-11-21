@@ -25,10 +25,11 @@ class PDFtoSVGConverter:
                  merge_radius_diff_threshold: float = 0.1,
                  zigzag_len_epsilon: float = 1e-6,
                  zigzag_alternation_ratio: float = 0.5,
-                 zigzag_min_angle: float = 2.0,
+                 zigzag_min_angle: float = 0.1,
                  smoothing_lambda: float = 0.4,
                  smoothing_mu: float = -0.42,
                  smoothing_passes: int = 6,
+                 force_smoothing: bool = False,
                  curvature_cross_threshold: float = 0.05,
                  min_radius: float = 5.0,
                  full_circle_dist_threshold_multiplier: float = 1.2,
@@ -51,6 +52,7 @@ class PDFtoSVGConverter:
             smoothing_lambda: Lambda for Taubin smoothing
             smoothing_mu: Mu for Taubin smoothing
             smoothing_passes: Number of passes for Taubin smoothing
+            force_smoothing: Always smooth polylines before arc detection (ignore zigzag check)
             curvature_cross_threshold: Threshold for curvature cross product
             min_radius: Minimum radius for arc detection
             full_circle_dist_threshold_multiplier: Multiplier for full circle distance threshold
@@ -73,6 +75,7 @@ class PDFtoSVGConverter:
             smoothing_lambda=smoothing_lambda,
             smoothing_mu=smoothing_mu,
             smoothing_passes=smoothing_passes,
+            force_smoothing=force_smoothing,
             curvature_cross_threshold=curvature_cross_threshold,
             min_radius=min_radius,
             full_circle_dist_threshold_multiplier=full_circle_dist_threshold_multiplier,
@@ -247,6 +250,10 @@ class PDFtoSVGConverter:
         for polyline in polylines:
             if len(polyline) < 2:
                 continue
+
+            # Optionally smooth upfront so both arc detection and fallback polylines use it
+            if self.detector:
+                polyline = self.detector._maybe_smooth(polyline)
 
             # Try arc detection if enabled
             if self.arc_detection and len(polyline) >= self.detector.min_arc_points:
@@ -712,6 +719,8 @@ def main():
                        help='Disable zigzag smoothing preprocessing')
     parser.add_argument('--smoothing_window', type=int, default=5,
                        help='Window size for smoothing (must be odd, default: 5)')
+    parser.add_argument('--force-smoothing', action='store_true',
+                       help='Force smoothing even if zigzag detection does not trigger')
     
     # New arguments
     parser.add_argument('--merge_dist_threshold_multiplier', type=float, default=2.0, help='Multiplier for merge distance threshold')
@@ -719,7 +728,7 @@ def main():
     parser.add_argument('--merge_radius_diff_threshold', type=float, default=0.1, help='Threshold for merging radii')
     parser.add_argument('--zigzag_len_epsilon', type=float, default=1e-6, help='Epsilon for zigzag length')
     parser.add_argument('--zigzag_alternation_ratio', type=float, default=0.5, help='Ratio for zigzag alternation')
-    parser.add_argument('--zigzag_min_angle', type=float, default=2.0, help='Minimum angle for zigzag detection')
+    parser.add_argument('--zigzag_min_angle', type=float, default=0.1, help='Minimum angle for zigzag detection')
     parser.add_argument('--smoothing_lambda', type=float, default=0.4, help='Lambda for Taubin smoothing')
     parser.add_argument('--smoothing_mu', type=float, default=-0.42, help='Mu for Taubin smoothing')
     parser.add_argument('--smoothing_passes', type=int, default=6, help='Number of passes for Taubin smoothing')
@@ -739,6 +748,7 @@ def main():
         min_arc_points=args.min_arc_points,
         enable_smoothing=not args.no_smoothing,
         smoothing_window=args.smoothing_window,
+        force_smoothing=args.force_smoothing,
         merge_dist_threshold_multiplier=args.merge_dist_threshold_multiplier,
         merge_center_dist_threshold=args.merge_center_dist_threshold,
         merge_radius_diff_threshold=args.merge_radius_diff_threshold,

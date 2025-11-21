@@ -52,10 +52,11 @@ class ArcDetector:
                  merge_radius_diff_threshold: float = 0.1,
                  zigzag_len_epsilon: float = 1e-6,
                  zigzag_alternation_ratio: float = 0.5,
-                 zigzag_min_angle: float = 2.0,
+                 zigzag_min_angle: float = 0.1,
                  smoothing_lambda: float = 0.4,
                  smoothing_mu: float = -0.42,
                  smoothing_passes: int = 6,
+                 force_smoothing: bool = False,
                  curvature_cross_threshold: float = 0.05,
                  min_radius: float = 5.0,
                  full_circle_dist_threshold_multiplier: float = 1.2,
@@ -80,6 +81,7 @@ class ArcDetector:
             smoothing_lambda: Taubin smoothing lambda parameter (shrink) (default: 0.4)
             smoothing_mu: Taubin smoothing mu parameter (expand) (default: -0.42)
             smoothing_passes: Number of Taubin smoothing passes (default: 6)
+            force_smoothing: Always smooth polylines before arc detection (ignore zigzag check)
             curvature_cross_threshold: Cross product threshold for curvature detection (default: 0.05)
             min_radius: Minimum radius to consider as a valid arc (default: 5.0)
             full_circle_dist_threshold_multiplier: Multiplier for average segment length to check loop closure (default: 1.2)
@@ -103,6 +105,7 @@ class ArcDetector:
         self.smoothing_lambda = smoothing_lambda
         self.smoothing_mu = smoothing_mu
         self.smoothing_passes = smoothing_passes
+        self.force_smoothing = force_smoothing
         self.curvature_cross_threshold = curvature_cross_threshold
         self.min_radius = min_radius
         self.full_circle_dist_threshold_multiplier = full_circle_dist_threshold_multiplier
@@ -119,12 +122,10 @@ class ArcDetector:
         if len(points) < self.min_arc_points:
             return []
 
-        points = [Point(p[0], p[1]) for p in points]
+        # Preprocessing: optionally smooth before segmentation
+        points = self._maybe_smooth(points)
 
-        # Preprocessing: Smooth zigzag patterns if enabled
-        if self.enable_smoothing and len(points) >= self.smoothing_window:
-            if self._detect_zigzag_pattern(points):
-                points = self._smooth_polyline(points)
+        points = [Point(p[0], p[1]) for p in points]
 
         # Step 1: Segment polyline by curvature regions
         curved_segments = self._segment_by_curvature(points)
@@ -142,6 +143,22 @@ class ArcDetector:
             arcs = self._merge_adjacent_arcs(arcs)
 
         return arcs
+
+    def _maybe_smooth(self, points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """
+        Smooth a polyline if smoothing is enabled and either force_smoothing is set
+        or a zigzag pattern is detected.
+        """
+        if not self.enable_smoothing or len(points) < self.smoothing_window:
+            return points
+
+        points_obj = [Point(p[0], p[1]) for p in points]
+
+        if self.force_smoothing or self._detect_zigzag_pattern(points_obj):
+            smoothed = self._smooth_polyline(points_obj)
+            return [(p.x, p.y) for p in smoothed]
+
+        return points
 
     def _merge_adjacent_arcs(self, arcs: List[Arc]) -> List[Arc]:
         """
@@ -1042,15 +1059,11 @@ class ArcDetector:
         if len(points) < self.min_arc_points:
             return None
 
+        # Optional smoothing before analysis
+        points = self._maybe_smooth(points)
+
         # Convert to Point objects for preprocessing
         points_obj = [Point(p[0], p[1]) for p in points]
-
-        # Apply smoothing if zigzag detected
-        if self.enable_smoothing and len(points_obj) >= self.smoothing_window:
-            if self._detect_zigzag_pattern(points_obj):
-                points_obj = self._smooth_polyline(points_obj)
-                # Convert back to tuples for closed loop check
-                points = [(p.x, p.y) for p in points_obj]
 
         # Check if it's a closed loop
         if not self.is_closed_loop(points, tolerance_factor=self.full_circle_dist_threshold_multiplier):
