@@ -46,7 +46,21 @@ class ArcDetector:
     def __init__(self, angle_tolerance: float = 5.0, radius_tolerance: float = 0.02,
                  min_arc_points: int = 4, collinearity_threshold: float = 0.001,
                  enable_smoothing: bool = True, smoothing_window: int = 5,
-                 min_arc_span: float = 15.0, min_segment_curvature: float = 10.0):
+                 min_arc_span: float = 15.0, min_segment_curvature: float = 10.0,
+                 merge_dist_threshold_multiplier: float = 2.0,
+                 merge_center_dist_threshold: float = 0.1,
+                 merge_radius_diff_threshold: float = 0.1,
+                 zigzag_len_epsilon: float = 1e-6,
+                 zigzag_alternation_ratio: float = 0.5,
+                 zigzag_min_angle: float = 2.0,
+                 smoothing_lambda: float = 0.4,
+                 smoothing_mu: float = -0.42,
+                 smoothing_passes: int = 6,
+                 curvature_cross_threshold: float = 0.05,
+                 min_radius: float = 5.0,
+                 full_circle_dist_threshold_multiplier: float = 1.2,
+                 full_circle_angle_span: float = 358.0,
+                 least_squares_epsilon: float = 1e-10):
         """
         Args:
             angle_tolerance: Max deviation in degrees from expected arc angles
@@ -57,8 +71,20 @@ class ArcDetector:
             smoothing_window: Window size for moving average smoothing (must be odd)
             min_arc_span: Minimum geometric arc span in degrees (default: 15.0)
             min_segment_curvature: Minimum cumulative curvature for segment validation in degrees (default: 10.0)
-                                   Lower values (5.0) detect smaller arcs but may increase false positives.
-                                   Higher values (15.0) are more conservative for noisy data.
+            merge_dist_threshold_multiplier: Multiplier for average segment length to determine adjacency (default: 2.0)
+            merge_center_dist_threshold: Threshold for center distance relative to radius (default: 0.1)
+            merge_radius_diff_threshold: Threshold for radius difference relative to radius (default: 0.1)
+            zigzag_len_epsilon: Minimum vector length to consider for zigzag detection (default: 1e-6)
+            zigzag_alternation_ratio: Ratio of sign changes to total angles for zigzag detection (default: 0.5)
+            zigzag_min_angle: Minimum average absolute angle to consider for zigzag detection (default: 2.0)
+            smoothing_lambda: Taubin smoothing lambda parameter (shrink) (default: 0.4)
+            smoothing_mu: Taubin smoothing mu parameter (expand) (default: -0.42)
+            smoothing_passes: Number of Taubin smoothing passes (default: 6)
+            curvature_cross_threshold: Cross product threshold for curvature detection (default: 0.05)
+            min_radius: Minimum radius to consider as a valid arc (default: 5.0)
+            full_circle_dist_threshold_multiplier: Multiplier for average segment length to check loop closure (default: 1.2)
+            full_circle_angle_span: Minimum angle span to consider as a full circle (default: 358.0)
+            least_squares_epsilon: Epsilon for determinant check in least squares fit (default: 1e-10)
         """
         self.angle_tolerance = angle_tolerance
         self.radius_tolerance = radius_tolerance
@@ -68,6 +94,20 @@ class ArcDetector:
         self.smoothing_window = smoothing_window if smoothing_window % 2 == 1 else smoothing_window + 1
         self.min_arc_span = min_arc_span
         self.min_segment_curvature = min_segment_curvature
+        self.merge_dist_threshold_multiplier = merge_dist_threshold_multiplier
+        self.merge_center_dist_threshold = merge_center_dist_threshold
+        self.merge_radius_diff_threshold = merge_radius_diff_threshold
+        self.zigzag_len_epsilon = zigzag_len_epsilon
+        self.zigzag_alternation_ratio = zigzag_alternation_ratio
+        self.zigzag_min_angle = zigzag_min_angle
+        self.smoothing_lambda = smoothing_lambda
+        self.smoothing_mu = smoothing_mu
+        self.smoothing_passes = smoothing_passes
+        self.curvature_cross_threshold = curvature_cross_threshold
+        self.min_radius = min_radius
+        self.full_circle_dist_threshold_multiplier = full_circle_dist_threshold_multiplier
+        self.full_circle_angle_span = full_circle_angle_span
+        self.least_squares_epsilon = least_squares_epsilon
 
     def detect_arcs(self, points: List[Tuple[float, float]]) -> List[Arc]:
         """
@@ -127,15 +167,15 @@ class ArcDetector:
                     for i in range(len(current_arc.points)-1)
                 ) / max(1, len(current_arc.points)-1)
 
-                # Check if endpoints are adjacent (within 2x average segment length)
-                if dist < 2.0 * avg_segment_length:
+                # Check if endpoints are adjacent (within threshold * average segment length)
+                if dist < self.merge_dist_threshold_multiplier * avg_segment_length:
                     # Check if they have similar center and radius
                     center_dist = current_arc.center.distance_to(next_arc.center)
                     radius_diff = abs(current_arc.radius - next_arc.radius)
                     avg_radius = (current_arc.radius + next_arc.radius) / 2
 
-                    if (center_dist < avg_radius * 0.1 and  # Centers within 10% of radius
-                        radius_diff < avg_radius * 0.1):     # Radii within 10%
+                    if (center_dist < avg_radius * self.merge_center_dist_threshold and  # Centers within threshold of radius
+                        radius_diff < avg_radius * self.merge_radius_diff_threshold):     # Radii within threshold
                         can_merge = True
 
             if can_merge:
@@ -189,7 +229,7 @@ class ArcDetector:
             len_v1 = math.sqrt(v1.x**2 + v1.y**2)
             len_v2 = math.sqrt(v2.x**2 + v2.y**2)
 
-            if len_v1 < 1e-6 or len_v2 < 1e-6:
+            if len_v1 < self.zigzag_len_epsilon or len_v2 < self.zigzag_len_epsilon:
                 continue
 
             v1_norm = Point(v1.x / len_v1, v1.y / len_v1)
@@ -226,7 +266,7 @@ class ArcDetector:
         # Zigzag detected if: high alternation + meaningful angles
         # Increased threshold to 2.0° to only catch actual zigzag noise
         # High-resolution circles have ~1.5° changes, shouldn't trigger smoothing
-        is_zigzag = alternation_ratio > 0.5 and avg_abs_angle > 2.0
+        is_zigzag = alternation_ratio > self.zigzag_alternation_ratio and avg_abs_angle > self.zigzag_min_angle
 
         return is_zigzag
 
@@ -272,9 +312,9 @@ class ArcDetector:
             effective_window += 1
 
         # Taubin smoothing parameters (fine-tuned for minimal distortion)
-        lambda_smooth = 0.4    # Shrink coefficient (positive) - reduced for gentler smoothing
-        mu_smooth = -0.42      # Expand coefficient (negative, slightly larger magnitude)
-        num_passes = 6         # Even number ensures last pass is expand (counters shrinkage)
+        lambda_smooth = self.smoothing_lambda    # Shrink coefficient (positive) - reduced for gentler smoothing
+        mu_smooth = self.smoothing_mu      # Expand coefficient (negative, slightly larger magnitude)
+        num_passes = self.smoothing_passes         # Even number ensures last pass is expand (counters shrinkage)
 
         smoothed = points
         half_window = effective_window // 2
@@ -364,7 +404,7 @@ class ArcDetector:
             # 2. Cumulative angle (total curvature, not instantaneous)
             # 3. Consistent curvature direction
 
-            has_curvature = abs(cross) > 0.05  # Not straight (cross product threshold)
+            has_curvature = abs(cross) > self.curvature_cross_threshold  # Not straight (cross product threshold)
 
             if has_curvature:
                 # Point has curvature - accumulate angle
@@ -455,7 +495,7 @@ class ArcDetector:
 
         # Solve 2x2 system
         det = A * D - B * C
-        if abs(det) < 1e-10:
+        if abs(det) < self.least_squares_epsilon:
             return None  # Singular system
 
         uc = (E * D - B * F) / det
@@ -523,7 +563,7 @@ class ArcDetector:
             return None
 
         # Filter out tiny arcs (increased threshold to reduce false positives)
-        if avg_radius < 5.0:
+        if avg_radius < self.min_radius:
             return None
 
         # Check radius consistency across all points (global fit quality)
@@ -595,8 +635,8 @@ class ArcDetector:
             avg_segment_length = sum(segment[i].distance_to(segment[i+1])
                                     for i in range(len(segment)-1)) / (len(segment)-1)
 
-            if first_to_last_dist < 1.2 * avg_segment_length:
-                if arc_span >= 358:
+            if first_to_last_dist < self.full_circle_dist_threshold_multiplier * avg_segment_length:
+                if arc_span >= self.full_circle_angle_span:
                     is_full_circle = True
 
         return Arc(
@@ -625,7 +665,7 @@ class ArcDetector:
             if arc and len(arc.points) >= self.min_arc_points:
                 # Filter out tiny arcs (likely noise or very small features)
                 # Minimum radius of 5.0 units to avoid detecting micro-circles
-                if arc.radius >= 5.0:
+                if arc.radius >= self.min_radius:
                     arcs.append(arc)
                     # Advance by the full arc length to prevent overlapping detections
                     i += len(arc.points)
@@ -696,11 +736,11 @@ class ArcDetector:
 
             # If first and last points are very close (within 1.2 segment lengths)
             # Use stricter threshold to avoid misclassifying partial arcs
-            if first_to_last_dist < 1.2 * avg_segment_length:
+            if first_to_last_dist < self.full_circle_dist_threshold_multiplier * avg_segment_length:
                 # Check if arc spans very close to 360 degrees
                 # Must be at least 358 degrees to be considered a full circle
                 angle_span = self._calculate_angle_span(start_angle, end_angle)
-                if angle_span >= 358:  # Very strict: must cover almost full circle
+                if angle_span >= self.full_circle_angle_span:  # Very strict: must cover almost full circle
                     is_full_circle = True
 
         return Arc(
@@ -999,7 +1039,7 @@ class ArcDetector:
                 points = [(p.x, p.y) for p in points_obj]
 
         # Check if it's a closed loop
-        if not self.is_closed_loop(points):
+        if not self.is_closed_loop(points, tolerance_factor=self.full_circle_dist_threshold_multiplier):
             return None
 
         # Check radius consistency
@@ -1014,7 +1054,7 @@ class ArcDetector:
             return None
 
         # Filter out tiny circles (likely noise)
-        if radius < 5.0:
+        if radius < self.min_radius:
             return None
 
         # Create full circle arc

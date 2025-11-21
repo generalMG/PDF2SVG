@@ -446,6 +446,21 @@ Examples:
     parser.add_argument('--dpi', type=int, default=150, help='Output DPI (default: 150)')
     parser.add_argument('--no-show', action='store_true', help='Do not display plots (just save to files)')
 
+    parser.add_argument('--merge_dist_threshold_multiplier', type=float, default=2.0, help='Multiplier for merge distance threshold')
+    parser.add_argument('--merge_center_dist_threshold', type=float, default=0.1, help='Threshold for merging centers')
+    parser.add_argument('--merge_radius_diff_threshold', type=float, default=0.1, help='Threshold for merging radii')
+    parser.add_argument('--zigzag_len_epsilon', type=float, default=1e-6, help='Epsilon for zigzag length')
+    parser.add_argument('--zigzag_alternation_ratio', type=float, default=0.5, help='Ratio for zigzag alternation')
+    parser.add_argument('--zigzag_min_angle', type=float, default=2.0, help='Minimum angle for zigzag detection')
+    parser.add_argument('--smoothing_lambda', type=float, default=0.4, help='Lambda for Taubin smoothing')
+    parser.add_argument('--smoothing_mu', type=float, default=-0.42, help='Mu for Taubin smoothing')
+    parser.add_argument('--smoothing_passes', type=int, default=6, help='Number of passes for Taubin smoothing')
+    parser.add_argument('--curvature_cross_threshold', type=float, default=0.05, help='Threshold for curvature cross product')
+    parser.add_argument('--min_radius', type=float, default=5.0, help='Minimum radius for arc detection')
+    parser.add_argument('--full_circle_dist_threshold_multiplier', type=float, default=1.2, help='Multiplier for full circle distance threshold')
+    parser.add_argument('--full_circle_angle_span', type=float, default=358.0, help='Minimum angle span for full circle')
+    parser.add_argument('--least_squares_epsilon', type=float, default=1e-10, help='Epsilon for least squares fitting')
+
     args = parser.parse_args()
 
     # Create detector with specified parameters
@@ -454,7 +469,21 @@ Examples:
         radius_tolerance=args.radius_tolerance,
         min_arc_points=args.min_arc_points,
         enable_smoothing=not args.no_smoothing,
-        smoothing_window=args.smoothing_window
+        smoothing_window=args.smoothing_window,
+        merge_dist_threshold_multiplier=args.merge_dist_threshold_multiplier,
+        merge_center_dist_threshold=args.merge_center_dist_threshold,
+        merge_radius_diff_threshold=args.merge_radius_diff_threshold,
+        zigzag_len_epsilon=args.zigzag_len_epsilon,
+        zigzag_alternation_ratio=args.zigzag_alternation_ratio,
+        zigzag_min_angle=args.zigzag_min_angle,
+        smoothing_lambda=args.smoothing_lambda,
+        smoothing_mu=args.smoothing_mu,
+        smoothing_passes=args.smoothing_passes,
+        curvature_cross_threshold=args.curvature_cross_threshold,
+        min_radius=args.min_radius,
+        full_circle_dist_threshold_multiplier=args.full_circle_dist_threshold_multiplier,
+        full_circle_angle_span=args.full_circle_angle_span,
+        least_squares_epsilon=args.least_squares_epsilon
     )
 
     paths, expected_results = create_test_paths()
